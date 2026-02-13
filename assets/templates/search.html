@@ -1,0 +1,28 @@
+{{template "header.html" .}}
+<title>{{.Query}} - Binternet</title>
+</head>
+
+<body>
+    <form class="search-container" method="get" action="/search.php" autocomplete="off">
+        <h1><a class="no-decoration accent" href="/">Binternet</a></h1>
+        <input type="text" name="q" placeholder="Search Image" value="{{.Query}}">
+    </form>
+
+    <div class='img-container'>
+        {{if .Images}}
+        {{range .Images}}
+        <a class='img-result' href='/image_proxy.php?url={{.}}'>
+            <img loading='lazy' src='/image_proxy.php?url={{.}}'>
+        </a>
+        {{end}}
+        {{else}}
+        <p>No results found.</p>
+        {{end}}
+    </div>
+
+    {{if .Bookmark}}
+    <h2 style="text-align: center;">
+        <a href="/search.php?q={{.Query}}&bookmark={{.Bookmark}}&csrftoken={{.CSRFToken}}">Next page</a>
+    </h2>
+    <br><br><br>
+    {{end}}

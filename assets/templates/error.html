@@ -1,0 +1,17 @@
+{{template "header.html" .}}
+<title>Error - Binternet</title>
+</head>
+
+<body>
+    <div class="mainContainer centered">
+        <h1><a class="no-decoration accent" href="/">Binternet</a></h1>
+        <div class="error-container" style="text-align: center; margin-top: 50px;">
+            <h2 style="color: #ff5555;">An error occurred</h2>
+            <p>{{.Message}}</p>
+            {{if .Detail}}
+            <pre
+                style="text-align: left; background: #333; padding: 10px; border-radius: 5px; overflow-x: auto;"><code>{{.Detail}}</code></pre>
+            {{end}}
+            <a href="/">Go Home</a>
+        </div>
+    </div>
