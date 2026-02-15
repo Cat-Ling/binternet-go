@@ -149,11 +149,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		if serialized, err := json.Marshal(result); err == nil {
 			s.Cache.Set(cacheKey, serialized, 15*time.Minute)
 		}
+	}
 
-		// Preload next page if enabled
-		if s.Config.Preload && result.Bookmark != "" && result.Bookmark != "-end-" {
-			go s.preload("web", query, result.Bookmark, result.CSRFToken)
-		}
+	// Preload next page if enabled (Runs on both Cache Hit and Miss)
+	if s.Config.Preload && result.Bookmark != "" && result.Bookmark != "-end-" {
+		go s.preload("web", query, result.Bookmark, result.CSRFToken)
 	}
 
 	data := struct {
@@ -205,7 +205,7 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.Cache.Set(cacheKey, serialized, 15*time.Minute)
 	}
 
-	// Preload next page if enabled
+	// Preload next page if enabled (Runs on both Cache Hit and Miss)
 	if s.Config.Preload && result.Bookmark != "" && result.Bookmark != "-end-" {
 		go s.preload("api", query, result.Bookmark, result.CSRFToken)
 	}
@@ -216,33 +216,74 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) preload(mode, query, bookmark, csrfToken string) {
 	// Avoid duplicate preloads?
-	// Simple preload logic
+	// Preload logic
 	var result *pinterest.SearchResult
 	var err error
 	var cacheKey string
 
 	if mode == "web" {
 		cacheKey = fmt.Sprintf("search:web:%s:%s", query, bookmark)
-		// Check if already cached
-		if _, found := s.Cache.Get(cacheKey); found {
-			return
-		}
-		result, err = s.Client.SearchWeb(query, bookmark, csrfToken)
 	} else {
 		cacheKey = fmt.Sprintf("search:api:%s:%s", query, bookmark)
-		if _, found := s.Cache.Get(cacheKey); found {
-			return
-		}
-		result, err = s.Client.SearchAPI(query, bookmark, csrfToken)
 	}
 
-	if err == nil {
+	// Check Cache for Search Result
+	if cachedBytes, found := s.Cache.Get(cacheKey); found {
+		if jsonErr := json.Unmarshal(cachedBytes, &result); jsonErr != nil {
+			result = nil
+		}
+	}
+
+	// If not in cache or unmarshal failed, fetch from source
+	if result == nil {
+		if mode == "web" {
+			result, err = s.Client.SearchWeb(query, bookmark, csrfToken)
+		} else {
+			result, err = s.Client.SearchAPI(query, bookmark, csrfToken)
+		}
+
+		if err != nil {
+			fmt.Printf("Preload fetch failed: %v\n", err)
+			return
+		}
+
+		// Cache the new result
 		if serialized, err := json.Marshal(result); err == nil {
 			fmt.Printf("Preloaded %s result for query: %s\n", mode, query)
 			s.Cache.Set(cacheKey, serialized, 15*time.Minute)
 		}
-	} else {
-		fmt.Printf("Preload failed: %v\n", err)
+	}
+
+	// Preload Images (from either cached or fetched result)
+	if result != nil && len(result.Images) > 0 && s.Config.PreloadImages {
+		go func(images []string) {
+			// Simple semaphore to limit concurrent image preloads to, say, 10 at a time
+			sem := make(chan struct{}, 10)
+			for _, imgURL := range images {
+				sem <- struct{}{}
+				go func(url string) {
+					defer func() { <-sem }()
+					// Check cache first
+					if _, found := s.Cache.Get(url); found {
+						return
+					}
+
+					// Fetch and Cache
+					resp, err := http.Get(url)
+					if err != nil {
+						return
+					}
+					defer resp.Body.Close()
+
+					if resp.StatusCode == http.StatusOK {
+						body, err := io.ReadAll(resp.Body)
+						if err == nil && len(body) > 0 {
+							s.Cache.Set(url, body, 0)
+						}
+					}
+				}(imgURL)
+			}
+		}(result.Images)
 	}
 }
 
@@ -322,18 +363,84 @@ func (s *Server) handleImageProxy(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 
-	body, err := io.ReadAll(resp.Body)
+	// Create a TeeReader to permit streaming to user while capturing for cache
+	// We need to read into a buffer for the cache
+	// IMPORTANT: Since we want to be "blazing fast", we prioritize writing to 'w'.
+	// But TeeReader writes to both synchronously.
+	// If the user has a slow connection, this might block the cache write, or vice versa?
+	// Actually, Cache write is just memory append until we flush.
+	// So TeeReader is fine, but we need to capture the full body for cache.
+
+	// 5MB limit check?
+	// Let's just limit reading to avoid DoS
+	const maxBodySize = 15 * 1024 * 1024 // 15MB
+	limitReader := io.LimitReader(resp.Body, maxBodySize)
+
+	// TeeReader writes to 'w' (client) and 'buf' (cache input)
+	// Wait, strings.Builder is not thread safe if we used a pipe, but here we are single threaded in this handler.
+	// However, TeeReader writes effectively mimic "copy to w, then copy to buf".
+	// If the client is slow, writing to 'w' blocks. This is unavoidable for streaming to client.
+	// But it does verify we don't wait for FULL body before sending first byte.
+
+	// We can't use strings.Builder with TeeReader directly because TeeReader takes a Writer.
+	// bytes.Buffer is a simple Writer.
+	// To minimize allocs, we could pre-allocate if we knew content-length.
+
+	// Create a pipe? No, that's for concurrent reading.
+	// We just want to copy to two places.
+	// io.MultiWriter(w, &buf)
+
+	// But wait, if we fail to read fully, we shouldn't cache partials ideally.
+	// But we can check error at the end.
+
+	// The problem is we want to return from the handler only after writing to user is done,
+	// but the cache setting should happen "after" that?
+	// If we use `go func() { ... }` we need the data.
+	// So we must capture the data during the write.
+
+	// If we want TRULY async cache:
+	// We need to read from Body.
+	// Write to Client.
+	// Write to some buffer.
+	// AFTER client is done, maximize the buffer.
+
+	// Better approach for speed + caching:
+	// 1. Start copying to client immediately.
+	// 2. Use a custom writer that also appends to a byte slice.
+
+	cacheBuf := new(strings.Builder)
+	if resp.ContentLength > 0 {
+		cacheBuf.Grow(int(resp.ContentLength))
+	}
+
+	multiWriter := io.MultiWriter(w, cacheBuf)
+
+	_, err = io.Copy(multiWriter, limitReader)
 	if err != nil {
-		fmt.Printf("Image Proxy Read Error: %v\n", err)
-		http.Error(w, "Image unavailable", http.StatusInternalServerError)
+		// If client disconnects or network error, we probably shouldn't cache the potentially partial result
+		fmt.Printf("Image Proxy Stream Error: %v\n", err)
 		return
 	}
 
-	if s.Cache != nil {
-		s.Cache.Set(imageURL, body, 0) // Images cached indefinitely (or until eviction)
-	}
+	// Async Cache Set
+	// We captured the full body efficiently while streaming.
+	// Now offload the actual "Set" (which might involve disk I/O or hashing) to a goroutine
+	// so we can return and close the HTTP request context immediately (though HTTP/1.1 pipelining might wait, Go handles this well).
 
-	w.Write(body)
+	// We need a copy of the string/bytes because the builder buffer might be GC'd?
+	// actually strings.Builder String() returns a copy or a reference?
+	// It's a copy if we cast to []byte usually or just use the string.
+	// Let's use string.
+
+	fullBody := cacheBuf.String() // This creates a copy of the string currently in the builder
+
+	if s.Cache != nil && len(fullBody) > 0 {
+		go func(data string) {
+			// Convert back to bytes for cache interface
+			// This is cheap.
+			s.Cache.Set(imageURL, []byte(data), 0)
+		}(fullBody)
+	}
 }
 
 // FileServer conveniently sets up a http.FileServer handler to serve

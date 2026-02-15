@@ -17,6 +17,7 @@ type Config struct {
 	MemoryCacheLimit   int64 // MB
 	FallbackDNS        string
 	Preload            bool
+	PreloadImages      bool
 	ShowErrorsToClient bool
 }
 
@@ -34,8 +35,9 @@ func Load() *Config {
 		MemoryCache:        getEnv("BINTERNET_MEMORY_CACHE", "false") == "true",
 		MemoryCacheLimit:   getEnvInt64("BINTERNET_MEMORY_CACHE_LIMIT", 50), // 50MB
 		FallbackDNS:        getEnv("BINTERNET_FALLBACK_DNS", ""),
-		Preload:            getEnv("BINTERNET_PRELOAD", "false") == "true",
-		ShowErrorsToClient: getEnv("BINTERNET_SHOW_ERRORS_TO_CLIENT", "false") == "true",
+		Preload:            getEnvBool("BINTERNET_PRELOAD", false),
+		PreloadImages:      getEnvBool("BINTERNET_PRELOAD_IMAGES", false),
+		ShowErrorsToClient: getEnvBool("BINTERNET_SHOW_ERRORS_TO_CLIENT", false),
 	}
 }
 
