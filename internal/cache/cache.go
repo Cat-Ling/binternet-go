@@ -100,7 +100,6 @@ func (c *LayeredCache) Get(key string) ([]byte, bool) {
 func (c *LayeredCache) Set(key string, value []byte, ttl time.Duration) {
 	if c.useMemory {
 		c.memoryCache.SetWithTTL(key, value, int64(len(value)), ttl)
-		c.memoryCache.Wait()
 	}
 
 	if c.useDisk {

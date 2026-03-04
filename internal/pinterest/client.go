@@ -23,7 +23,8 @@ type SearchResult struct {
 }
 
 type PinterestClient struct {
-	HTTPClient *http.Client
+	HTTPClient       *http.Client
+	FallbackResolver *net.Resolver
 }
 
 func NewClient(fallbackDNS string) *PinterestClient {
@@ -33,34 +34,42 @@ func NewClient(fallbackDNS string) *PinterestClient {
 		KeepAlive: 30 * time.Second,
 	}
 
+	var fallbackResolver *net.Resolver
+	if fallbackDNS != "" {
+		fallbackResolver = &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				d := net.Dialer{Timeout: time.Second * 10}
+				dnsServer := fallbackDNS
+				if !strings.Contains(dnsServer, ":") {
+					dnsServer += ":53"
+				}
+				return d.DialContext(ctx, "udp", dnsServer)
+			},
+		}
+	}
+
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          500,
-		MaxIdleConnsPerHost:   500,
+		MaxIdleConns:          2000, // Increased for high concurrency
+		MaxIdleConnsPerHost:   1000, // Increased for high concurrency
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			conn, err := dialer.DialContext(ctx, network, addr)
-			// If default failed and it looks like a DNS issue (or any issue really, simple fallback), try custom resolver
-			// fmt.Printf("Default dial failed for %s: %v. Retrying with fallback DNS %s...\n", addr, err, fallbackDNS)
-
-			host, port, _ := net.SplitHostPort(addr)
-
-			r := &net.Resolver{
-				PreferGo: true,
-				Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-					d := net.Dialer{Timeout: time.Second * 10}
-					dnsServer := fallbackDNS
-					if !strings.Contains(dnsServer, ":") {
-						dnsServer += ":53"
-					}
-					return d.DialContext(ctx, "udp", dnsServer)
-				},
+			if err == nil {
+				return conn, nil
 			}
 
-			ips, err := r.LookupHost(ctx, host)
+			if fallbackResolver == nil {
+				return nil, err
+			}
+
+			// If default failed and we have a fallback, try custom resolver
+			host, port, _ := net.SplitHostPort(addr)
+			ips, err := fallbackResolver.LookupHost(ctx, host)
 			if err != nil {
 				return nil, fmt.Errorf("fallback DNS lookup failed: %w", err)
 			}
@@ -75,7 +84,7 @@ func NewClient(fallbackDNS string) *PinterestClient {
 					return conn, nil
 				}
 			}
-			return nil, fmt.Errorf("failed to dial all resolved IPs via fallback DNS")
+			return nil, fmt.Errorf("failed to dial all resolved IPs via fallback DNS: %w", err)
 		},
 	}
 
@@ -88,6 +97,7 @@ func NewClient(fallbackDNS string) *PinterestClient {
 			// No Jar
 			Timeout: 30 * time.Second,
 		},
+		FallbackResolver: fallbackResolver,
 	}
 }
 
@@ -104,7 +114,7 @@ func (t *UserAgentTransport) RoundTrip(req *http.Request) (*http.Response, error
 }
 
 // SearchWeb mirrors search.php behavior
-func (c *PinterestClient) SearchWeb(query string, bookmark string, csrfToken string) (*SearchResult, error) {
+func (c *PinterestClient) SearchWeb(ctx context.Context, query string, bookmark string, csrfToken string) (*SearchResult, error) {
 	dataParamObj := map[string]interface{}{
 		"options": map[string]interface{}{
 			"query": query,
@@ -117,17 +127,17 @@ func (c *PinterestClient) SearchWeb(query string, bookmark string, csrfToken str
 
 	if bookmark != "" && csrfToken == "" {
 		var err error
-		csrfToken, err = c.FetchCSRFToken()
+		csrfToken, err = c.FetchCSRFToken(ctx)
 		if err != nil {
 			// Fail silently or maybe return error? User asked for less output.
 		}
 	}
 
-	return c.executeRequest(dataParamObj, bookmark, csrfToken, true)
+	return c.executeRequest(ctx, dataParamObj, bookmark, csrfToken, true)
 }
 
 // SearchAPI mirrors api.php behavior
-func (c *PinterestClient) SearchAPI(query string, bookmark string, csrfToken string) (*SearchResult, error) {
+func (c *PinterestClient) SearchAPI(ctx context.Context, query string, bookmark string, csrfToken string) (*SearchResult, error) {
 	options := map[string]interface{}{
 		"query": query,
 	}
@@ -138,16 +148,16 @@ func (c *PinterestClient) SearchAPI(query string, bookmark string, csrfToken str
 
 	if bookmark != "" && csrfToken == "" {
 		var err error
-		csrfToken, err = c.FetchCSRFToken()
+		csrfToken, err = c.FetchCSRFToken(ctx)
 		if err != nil {
 			// Fail silently
 		}
 	}
 
-	return c.executeRequest(options, bookmark, csrfToken, false)
+	return c.executeRequest(ctx, options, bookmark, csrfToken, false)
 }
 
-func (c *PinterestClient) executeRequest(data interface{}, bookmark string, csrfToken string, isWeb bool) (*SearchResult, error) {
+func (c *PinterestClient) executeRequest(ctx context.Context, data interface{}, bookmark string, csrfToken string, isWeb bool) (*SearchResult, error) {
 	dataParamBytes, err := json.Marshal(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal data param: %w", err)
@@ -160,10 +170,10 @@ func (c *PinterestClient) executeRequest(data interface{}, bookmark string, csrf
 
 	if bookmark == "" {
 		finalURL = fmt.Sprintf("%s?data=%s", BaseURL, dataParam)
-		req, err = http.NewRequest("GET", finalURL, nil)
+		req, err = http.NewRequestWithContext(ctx, "GET", finalURL, nil)
 	} else {
 		finalURL = BaseURL
-		req, err = http.NewRequest("POST", finalURL, strings.NewReader("data="+dataParam))
+		req, err = http.NewRequestWithContext(ctx, "POST", finalURL, strings.NewReader("data="+dataParam))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 
@@ -252,9 +262,9 @@ func (c *PinterestClient) executeRequest(data interface{}, bookmark string, csrf
 }
 
 // FetchCSRFToken visits the base URL to manually extract a CSRF token.
-func (c *PinterestClient) FetchCSRFToken() (string, error) {
+func (c *PinterestClient) FetchCSRFToken(ctx context.Context) (string, error) {
 	// Try root domain with HEAD request, similar to curl -I
-	req, err := http.NewRequest("HEAD", "https://www.pinterest.com/", nil)
+	req, err := http.NewRequestWithContext(ctx, "HEAD", "https://www.pinterest.com/", nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request for csrf token: %w", err)
 	}

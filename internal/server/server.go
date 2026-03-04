@@ -5,6 +5,7 @@ import (
 	"binternet-go/internal/cache"
 	"binternet-go/internal/config"
 	"binternet-go/internal/pinterest"
+	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -20,18 +21,20 @@ import (
 )
 
 type Server struct {
-	Router *chi.Mux
-	Config *config.Config
-	Client *pinterest.PinterestClient
-	Cache  cache.Cache // TODO: Use this for caching images/search results if needed
-	Tmpl   *template.Template
+	Router     *chi.Mux
+	Config     *config.Config
+	Client     *pinterest.PinterestClient
+	Cache      cache.Cache // TODO: Use this for caching images/search results if needed
+	Tmpl       *template.Template
+	PreloadSem chan struct{}
 }
 
 func NewServer(cfg *config.Config) (*Server, error) {
 	s := &Server{
-		Router: chi.NewRouter(),
-		Config: cfg,
-		Client: pinterest.NewClient(cfg.FallbackDNS),
+		Router:     chi.NewRouter(),
+		Config:     cfg,
+		Client:     pinterest.NewClient(cfg.FallbackDNS),
+		PreloadSem: make(chan struct{}, 50), // Limit global concurrent image preloads
 	}
 
 	// Initialize Cache
@@ -139,7 +142,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if result == nil {
 		// Use SearchWeb for the HTML frontend
 		var err error
-		result, err = s.Client.SearchWeb(query, bookmark, csrfToken)
+		result, err = s.Client.SearchWeb(r.Context(), query, bookmark, csrfToken)
 		if err != nil {
 			s.handleError(w, http.StatusInternalServerError, "Search failed. Please try again later.", err)
 			return
@@ -153,7 +156,16 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	// Preload next page if enabled (Runs on both Cache Hit and Miss)
 	if s.Config.Preload && result.Bookmark != "" && result.Bookmark != "-end-" {
-		go s.preload("web", query, result.Bookmark, result.CSRFToken)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("Recovered from panic in preload: %v\n", r)
+				}
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			s.preload(ctx, "web", query, result.Bookmark, result.CSRFToken)
+		}()
 	}
 
 	data := struct {
@@ -189,7 +201,7 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 
 	// Use SearchAPI for the JSON API
 	var err error
-	result, err = s.Client.SearchAPI(query, bookmark, csrfToken)
+	result, err = s.Client.SearchAPI(r.Context(), query, bookmark, csrfToken)
 	if err != nil {
 		// API always returns JSON
 		w.Header().Set("Content-Type", "application/json")
@@ -207,14 +219,23 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 
 	// Preload next page if enabled (Runs on both Cache Hit and Miss)
 	if s.Config.Preload && result.Bookmark != "" && result.Bookmark != "-end-" {
-		go s.preload("api", query, result.Bookmark, result.CSRFToken)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("Recovered from panic in preload: %v\n", r)
+				}
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			s.preload(ctx, "api", query, result.Bookmark, result.CSRFToken)
+		}()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
 }
 
-func (s *Server) preload(mode, query, bookmark, csrfToken string) {
+func (s *Server) preload(ctx context.Context, mode, query, bookmark, csrfToken string) {
 	// Avoid duplicate preloads?
 	// Preload logic
 	var result *pinterest.SearchResult
@@ -237,9 +258,9 @@ func (s *Server) preload(mode, query, bookmark, csrfToken string) {
 	// If not in cache or unmarshal failed, fetch from source
 	if result == nil {
 		if mode == "web" {
-			result, err = s.Client.SearchWeb(query, bookmark, csrfToken)
+			result, err = s.Client.SearchWeb(ctx, query, bookmark, csrfToken)
 		} else {
-			result, err = s.Client.SearchAPI(query, bookmark, csrfToken)
+			result, err = s.Client.SearchAPI(ctx, query, bookmark, csrfToken)
 		}
 
 		if err != nil {
@@ -257,31 +278,55 @@ func (s *Server) preload(mode, query, bookmark, csrfToken string) {
 	// Preload Images (from either cached or fetched result)
 	if result != nil && len(result.Images) > 0 && s.Config.PreloadImages {
 		go func(images []string) {
-			// Simple semaphore to limit concurrent image preloads to, say, 10 at a time
-			sem := make(chan struct{}, 10)
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("Recovered from panic in preload images: %v\n", r)
+				}
+			}()
+
 			for _, imgURL := range images {
-				sem <- struct{}{}
-				go func(url string) {
-					defer func() { <-sem }()
-					// Check cache first
-					if _, found := s.Cache.Get(url); found {
-						return
-					}
+				// Non-blocking attempt to acquire semaphore
+				// This prevents a single preload from blocking all others if semaphore is full?
+				// Actually, if we use `s.PreloadSem <- struct{}{}`, it blocks THIS goroutine (the one preloading THIS search result).
+				// This is GOOD as it throttles individual search results too.
+				select {
+				case s.PreloadSem <- struct{}{}:
+					go func(url string) {
+						defer func() { <-s.PreloadSem }()
+						defer func() {
+							if r := recover(); r != nil {
+								fmt.Printf("Recovered from panic in image fetch: %v\n", r)
+							}
+						}()
 
-					// Fetch and Cache
-					resp, err := http.Get(url)
-					if err != nil {
-						return
-					}
-					defer resp.Body.Close()
-
-					if resp.StatusCode == http.StatusOK {
-						body, err := io.ReadAll(resp.Body)
-						if err == nil && len(body) > 0 {
-							s.Cache.Set(url, body, 0)
+						// Check cache first
+						if _, found := s.Cache.Get(url); found {
+							return
 						}
-					}
-				}(imgURL)
+
+						// Fetch and Cache (Using client's HTTPClient for timeout and User-Agent)
+						// Create request with context to respect preload timeout
+						req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+						if err != nil {
+							return
+						}
+
+						resp, err := s.Client.HTTPClient.Do(req)
+						if err != nil {
+							return
+						}
+						defer resp.Body.Close()
+
+						if resp.StatusCode == http.StatusOK {
+							body, err := io.ReadAll(resp.Body)
+							if err == nil && len(body) > 0 {
+								s.Cache.Set(url, body, 0)
+							}
+						}
+					}(imgURL)
+				default:
+					// If global semaphore is full, we skip preloading this image to avoid backup
+				}
 			}
 		}(result.Images)
 	}
@@ -347,7 +392,7 @@ func (s *Server) handleImageProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch image
-	resp, err := http.Get(imageURL)
+	resp, err := s.Client.HTTPClient.Get(imageURL)
 	if err != nil {
 		fmt.Printf("Image Proxy Fetch Error: %v\n", err)
 		http.Error(w, "Image unavailable", http.StatusBadGateway)
@@ -436,6 +481,11 @@ func (s *Server) handleImageProxy(w http.ResponseWriter, r *http.Request) {
 
 	if s.Cache != nil && len(fullBody) > 0 {
 		go func(data string) {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("Recovered from panic in handleImageProxy cache set: %v\n", r)
+				}
+			}()
 			// Convert back to bytes for cache interface
 			// This is cheap.
 			s.Cache.Set(imageURL, []byte(data), 0)
