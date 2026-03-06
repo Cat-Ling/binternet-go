@@ -117,6 +117,8 @@ func (s *Server) routes() {
 			w.Header().Set("Content-Type", "image/png")
 		} else if strings.HasSuffix(fsPath, ".ico") {
 			w.Header().Set("Content-Type", "image/x-icon")
+		} else if strings.HasSuffix(fsPath, ".js") {
+			w.Header().Set("Content-Type", "application/javascript")
 		}
 
 		w.Write(data)
@@ -603,7 +605,7 @@ func FileServer(r chi.Router, path string, root http.FileSystem) {
 
 func (s *Server) SecurityHeadersMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		csp := "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none';"
+		csp := "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; object-src 'none';"
 		w.Header().Set("Content-Security-Policy", csp)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
