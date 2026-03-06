@@ -497,11 +497,10 @@ func (s *Server) handlePathProxy(w http.ResponseWriter, r *http.Request) {
 			if err := msgpack.Unmarshal(data, &cached); err == nil {
 				w.Header().Set("Cache-Control", "public, max-age=3600")
 				w.Header().Set("Content-Type", cached.ContentType)
-
-				// Optional: CORS headers for media playback just in case
 				w.Header().Set("Access-Control-Allow-Origin", "*")
 
-				w.Write(cached.Data)
+				// ServeContent natively handles Range requests for cached media
+				http.ServeContent(w, r, "media", time.Time{}, bytes.NewReader(cached.Data))
 				return
 			}
 		}
@@ -535,6 +534,7 @@ func (s *Server) handlePathProxy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Accept-Ranges", "bytes")
 
 	if contentRange := resp.Header.Get("Content-Range"); contentRange != "" {
 		w.Header().Set("Content-Range", contentRange)
@@ -544,29 +544,29 @@ func (s *Server) handlePathProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 
-	const maxBodySize = 50 * 1024 * 1024 // 50MB for video chunks/playlists
-	limitReader := io.LimitReader(resp.Body, maxBodySize)
-
 	var cacheBuf bytes.Buffer
-	// Only cache full OK responses, not partial 206 responses
-	doCache := (resp.StatusCode == http.StatusOK && s.Cache != nil)
+	// Only cache full OK responses under 50MB, not partial 206 responses
+	const maxCacheSize = 50 * 1024 * 1024
+	doCache := false
+	if resp.StatusCode == http.StatusOK && s.Cache != nil && resp.ContentLength > 0 && resp.ContentLength <= maxCacheSize {
+		doCache = true
+		cacheBuf.Grow(int(resp.ContentLength))
+	}
 
 	var writer io.Writer = w
 	if doCache {
-		if resp.ContentLength > 0 && resp.ContentLength < maxBodySize {
-			cacheBuf.Grow(int(resp.ContentLength))
-		}
 		writer = io.MultiWriter(w, &cacheBuf)
 	}
 
-	_, err = io.Copy(writer, limitReader)
+	// Stream the full response without LimitReader truncation so iOS Safari doesn't crash on large videos
+	_, err = io.Copy(writer, resp.Body)
 	if err != nil {
 		// Broken pipe / client disconnect — don't cache partial data
 		return
 	}
 
 	// Async cache set with correct content-type
-	if doCache && cacheBuf.Len() > 0 {
+	if doCache && cacheBuf.Len() > 0 && cacheBuf.Len() <= maxCacheSize {
 		fullBody := make([]byte, cacheBuf.Len())
 		copy(fullBody, cacheBuf.Bytes())
 
