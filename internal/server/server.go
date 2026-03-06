@@ -5,28 +5,49 @@ import (
 	"binternet-go/internal/cache"
 	"binternet-go/internal/config"
 	"binternet-go/internal/pinterest"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/vmihailenco/msgpack/v5"
 )
+
+// isAllowedProxyDomain checks if a host is allowed for proxying
+func isAllowedProxyDomain(host string) bool {
+	return host == "pinimg.com" ||
+		strings.HasSuffix(host, ".pinimg.com") ||
+		host == "pinterest.com" ||
+		strings.HasSuffix(host, ".pinterest.com")
+}
+
+// CachedImage stores image data with its content type for correct cache retrieval
+type CachedImage struct {
+	ContentType string `msgpack:"ct"`
+	Data        []byte `msgpack:"d"`
+}
 
 type Server struct {
 	Router     *chi.Mux
 	Config     *config.Config
 	Client     *pinterest.PinterestClient
-	Cache      cache.Cache // TODO: Use this for caching images/search results if needed
+	Cache      cache.Cache
 	Tmpl       *template.Template
 	PreloadSem chan struct{}
+
+	// Deduplicate in-flight preloads
+	preloadInFlight sync.Map
 }
 
 func NewServer(cfg *config.Config) (*Server, error) {
@@ -34,7 +55,7 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		Router:     chi.NewRouter(),
 		Config:     cfg,
 		Client:     pinterest.NewClient(cfg.FallbackDNS),
-		PreloadSem: make(chan struct{}, 50), // Limit global concurrent image preloads
+		PreloadSem: make(chan struct{}, 50),
 	}
 
 	// Initialize Cache
@@ -47,9 +68,19 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to initialize cache: %w", err)
 	}
 
-	// Load Templates from Embed FS
-	// Note: patterns are relative to the FS root
-	s.Tmpl, err = template.ParseFS(assets.AssetsFS, "templates/*.html")
+	// Load Templates from Embed FS with custom functions
+	funcMap := template.FuncMap{
+		"formatDuration": func(ms int) string {
+			secs := ms / 1000
+			mins := secs / 60
+			secs = secs % 60
+			return fmt.Sprintf("%d:%02d", mins, secs)
+		},
+		"stripScheme": func(u string) string {
+			return strings.TrimPrefix(strings.TrimPrefix(u, "https://"), "http://")
+		},
+	}
+	s.Tmpl, err = template.New("").Funcs(funcMap).ParseFS(assets.AssetsFS, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse templates: %w", err)
 	}
@@ -59,18 +90,16 @@ func NewServer(cfg *config.Config) (*Server, error) {
 }
 
 func (s *Server) routes() {
-	s.Router.Use(middleware.Logger)
+	// No middleware.Logger — only errors matter, stdout is expensive under load
 	s.Router.Use(middleware.Recoverer)
+	s.Router.Use(middleware.Compress(5, "text/html", "text/css", "application/json", "text/plain", "application/javascript"))
 	s.Router.Use(s.SecurityHeadersMiddleware)
 
-	// Static files from Embed FS
-	// assets.AssetsFS root contains "static" and "templates" folders
+	// Static files from Embed FS — with aggressive Cache-Control
 	staticSubFS, _ := fs.Sub(assets.AssetsFS, "static")
-	s.Router.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.FS(staticSubFS))))
+	s.Router.Handle("/static/*", s.staticCacheHeaders(http.StripPrefix("/static/", http.FileServer(http.FS(staticSubFS)))))
 
 	// Legacy static file support (misc/style-dark.css)
-	// Serve static files from /misc/
-	// Use a custom handler to serve from the embedded FS "static" subdirectory
 	s.Router.Get("/misc/*", func(w http.ResponseWriter, r *http.Request) {
 		fsPath := "static/" + chi.URLParam(r, "*")
 
@@ -80,7 +109,8 @@ func (s *Server) routes() {
 			return
 		}
 
-		// Set content type based on extension
+		w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
+
 		if strings.HasSuffix(fsPath, ".css") {
 			w.Header().Set("Content-Type", "text/css")
 		} else if strings.HasSuffix(fsPath, ".png") {
@@ -96,7 +126,15 @@ func (s *Server) routes() {
 	s.Router.Get("/search.php", s.handleSearch)
 	s.Router.Get("/api.php", s.handleAPI)
 	s.Router.Get("/image_proxy.php", s.handleImageProxy)
+	s.Router.Get("/video/*", s.handlePathProxy) // For transparent HLS proxying
 	s.Router.Get("/legal", s.handleLegal)
+}
+
+func (s *Server) staticCacheHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -126,21 +164,16 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try Cache First
 	cacheKey := fmt.Sprintf("search:web:%s:%s", query, bookmark)
 	var result *pinterest.SearchResult
 
 	if cachedBytes, found := s.Cache.Get(cacheKey); found {
-		if err := json.Unmarshal(cachedBytes, &result); err == nil {
+		if err := msgpack.Unmarshal(cachedBytes, &result); err == nil {
 			// Cache hit
-			// Update CSRF token from request if bookmark is used?
-			// The cached result has a CSRF token from when it was fetched.
-			// Is it safe to reuse? Probably.
 		}
 	}
 
 	if result == nil {
-		// Use SearchWeb for the HTML frontend
 		var err error
 		result, err = s.Client.SearchWeb(r.Context(), query, bookmark, csrfToken)
 		if err != nil {
@@ -148,36 +181,37 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Cache the result (15 minutes)
-		if serialized, err := json.Marshal(result); err == nil {
-			s.Cache.Set(cacheKey, serialized, 15*time.Minute)
+		if serialized, err := msgpack.Marshal(result); err == nil {
+			s.Cache.Set(cacheKey, serialized, 0)
 		}
 	}
 
-	// Preload next page if enabled (Runs on both Cache Hit and Miss)
 	if s.Config.Preload && result.Bookmark != "" && result.Bookmark != "-end-" {
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					fmt.Printf("Recovered from panic in preload: %v\n", r)
-				}
-			}()
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			defer cancel()
-			s.preload(ctx, "web", query, result.Bookmark, result.CSRFToken)
-		}()
+		s.triggerPreload("web", query, result.Bookmark, result.CSRFToken)
+	}
+
+	hasVideo := false
+	for _, m := range result.Media {
+		if m.IsVideo {
+			hasVideo = true
+			break
+		}
 	}
 
 	data := struct {
 		Query     string
 		Images    []string
+		Media     []pinterest.MediaItem
 		Bookmark  string
 		CSRFToken string
+		HasVideo  bool
 	}{
 		Query:     query,
 		Images:    result.Images,
+		Media:     result.Media,
 		Bookmark:  result.Bookmark,
-		CSRFToken: result.CSRFToken, // Use the one from result (which might be new)
+		CSRFToken: result.CSRFToken,
+		HasVideo:  hasVideo,
 	}
 
 	s.Tmpl.ExecuteTemplate(w, "search.html", data)
@@ -192,52 +226,56 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 	var result *pinterest.SearchResult
 
 	if cachedBytes, found := s.Cache.Get(cacheKey); found {
-		if err := json.Unmarshal(cachedBytes, &result); err == nil {
+		if err := msgpack.Unmarshal(cachedBytes, &result); err == nil {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(result)
 			return
 		}
 	}
 
-	// Use SearchAPI for the JSON API
 	var err error
 	result, err = s.Client.SearchAPI(r.Context(), query, bookmark, csrfToken)
 	if err != nil {
-		// API always returns JSON
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"error": "Internal Server Error"})
-		// Log the actual error
-		fmt.Printf("API Error: %v\n", err)
+		log.Printf("API Error: %v", err)
 		return
 	}
 
-	// Cache the result (15 minutes)
-	if serialized, err := json.Marshal(result); err == nil {
-		s.Cache.Set(cacheKey, serialized, 15*time.Minute)
+	if serialized, err := msgpack.Marshal(result); err == nil {
+		s.Cache.Set(cacheKey, serialized, 0)
 	}
 
-	// Preload next page if enabled (Runs on both Cache Hit and Miss)
 	if s.Config.Preload && result.Bookmark != "" && result.Bookmark != "-end-" {
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					fmt.Printf("Recovered from panic in preload: %v\n", r)
-				}
-			}()
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			defer cancel()
-			s.preload(ctx, "api", query, result.Bookmark, result.CSRFToken)
-		}()
+		s.triggerPreload("api", query, result.Bookmark, result.CSRFToken)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
 }
 
+func (s *Server) triggerPreload(mode, query, bookmark, csrfToken string) {
+	preloadKey := fmt.Sprintf("%s:%s:%s", mode, query, bookmark)
+
+	if _, loaded := s.preloadInFlight.LoadOrStore(preloadKey, struct{}{}); loaded {
+		return
+	}
+
+	go func() {
+		defer func() {
+			s.preloadInFlight.Delete(preloadKey)
+			if r := recover(); r != nil {
+				log.Printf("Recovered from panic in preload: %v", r)
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		s.preload(ctx, mode, query, bookmark, csrfToken)
+	}()
+}
+
 func (s *Server) preload(ctx context.Context, mode, query, bookmark, csrfToken string) {
-	// Avoid duplicate preloads?
-	// Preload logic
 	var result *pinterest.SearchResult
 	var err error
 	var cacheKey string
@@ -248,14 +286,12 @@ func (s *Server) preload(ctx context.Context, mode, query, bookmark, csrfToken s
 		cacheKey = fmt.Sprintf("search:api:%s:%s", query, bookmark)
 	}
 
-	// Check Cache for Search Result
 	if cachedBytes, found := s.Cache.Get(cacheKey); found {
-		if jsonErr := json.Unmarshal(cachedBytes, &result); jsonErr != nil {
+		if jsonErr := msgpack.Unmarshal(cachedBytes, &result); jsonErr != nil {
 			result = nil
 		}
 	}
 
-	// If not in cache or unmarshal failed, fetch from source
 	if result == nil {
 		if mode == "web" {
 			result, err = s.Client.SearchWeb(ctx, query, bookmark, csrfToken)
@@ -264,49 +300,39 @@ func (s *Server) preload(ctx context.Context, mode, query, bookmark, csrfToken s
 		}
 
 		if err != nil {
-			fmt.Printf("Preload fetch failed: %v\n", err)
 			return
 		}
 
-		// Cache the new result
-		if serialized, err := json.Marshal(result); err == nil {
-			fmt.Printf("Preloaded %s result for query: %s\n", mode, query)
-			s.Cache.Set(cacheKey, serialized, 15*time.Minute)
+		if serialized, err := msgpack.Marshal(result); err == nil {
+			s.Cache.Set(cacheKey, serialized, 0)
 		}
 	}
 
-	// Preload Images (from either cached or fetched result)
+	// Preload Images
 	if result != nil && len(result.Images) > 0 && s.Config.PreloadImages {
 		go func(images []string) {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Printf("Recovered from panic in preload images: %v\n", r)
+					log.Printf("Recovered from panic in preload images: %v", r)
 				}
 			}()
 
 			for _, imgURL := range images {
-				// Non-blocking attempt to acquire semaphore
-				// This prevents a single preload from blocking all others if semaphore is full?
-				// Actually, if we use `s.PreloadSem <- struct{}{}`, it blocks THIS goroutine (the one preloading THIS search result).
-				// This is GOOD as it throttles individual search results too.
 				select {
 				case s.PreloadSem <- struct{}{}:
-					go func(url string) {
+					go func(imgurl string) {
 						defer func() { <-s.PreloadSem }()
 						defer func() {
 							if r := recover(); r != nil {
-								fmt.Printf("Recovered from panic in image fetch: %v\n", r)
+								log.Printf("Recovered from panic in image fetch: %v", r)
 							}
 						}()
 
-						// Check cache first
-						if _, found := s.Cache.Get(url); found {
+						if _, found := s.Cache.Get(imgurl); found {
 							return
 						}
 
-						// Fetch and Cache (Using client's HTTPClient for timeout and User-Agent)
-						// Create request with context to respect preload timeout
-						req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+						req, err := http.NewRequestWithContext(ctx, "GET", imgurl, nil)
 						if err != nil {
 							return
 						}
@@ -320,12 +346,18 @@ func (s *Server) preload(ctx context.Context, mode, query, bookmark, csrfToken s
 						if resp.StatusCode == http.StatusOK {
 							body, err := io.ReadAll(resp.Body)
 							if err == nil && len(body) > 0 {
-								s.Cache.Set(url, body, 0)
+								cached := CachedImage{
+									ContentType: resp.Header.Get("Content-Type"),
+									Data:        body,
+								}
+								if encoded, err := msgpack.Marshal(&cached); err == nil {
+									s.Cache.Set(imgurl, encoded, 0)
+								}
 							}
 						}
 					}(imgURL)
 				default:
-					// If global semaphore is full, we skip preloading this image to avoid backup
+					// Global semaphore full, skip this image
 				}
 			}
 		}(result.Images)
@@ -334,7 +366,7 @@ func (s *Server) preload(ctx context.Context, mode, query, bookmark, csrfToken s
 
 func (s *Server) handleError(w http.ResponseWriter, status int, userMsg string, logErr error) {
 	if logErr != nil {
-		fmt.Printf("Error: %v\n", logErr)
+		log.Printf("Error: %v", logErr)
 	}
 
 	w.WriteHeader(status)
@@ -359,142 +391,197 @@ func (s *Server) handleImageProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate domain
 	u, err := url.Parse(imageURL)
 	if err != nil {
 		http.Error(w, "Invalid URL", http.StatusBadRequest)
 		return
 	}
 
-	allowedDomains := map[string]bool{
-		"pinimg.com":    true,
-		"i.pinimg.com":  true,
-		"pinterest.com": true,
-	}
-
-	if !allowedDomains[u.Host] {
-		// Try root domain check if needed, but strict host check is safer
+	if !isAllowedProxyDomain(u.Host) {
 		http.Error(w, "Domain not allowed", http.StatusForbidden)
 		return
 	}
 
-	// Check cache
+	// Check cache — deserialize CachedImage to get correct content-type
 	if s.Cache != nil {
 		if data, found := s.Cache.Get(imageURL); found {
-			w.Header().Set("Content-Type", "image/jpeg") // Defaulting to jpeg, but might need to store mime type in cache too
-			// Ideally cache value should be a struct with ContentType and Body
-			// For simplicity, let's assume raw bytes for now and maybe infer type or just serve.
-			// Re-checking the PHP, it sets header based on fetch, but for cache we need to know.
-			// Let's just write bytes.
-			w.Write(data)
-			return
+			var cached CachedImage
+			if err := msgpack.Unmarshal(data, &cached); err == nil {
+				w.Header().Set("Cache-Control", "public, max-age=3600")
+				w.Header().Set("Content-Type", cached.ContentType)
+				w.Write(cached.Data)
+				return
+			}
 		}
 	}
 
 	// Fetch image
 	resp, err := s.Client.HTTPClient.Get(imageURL)
 	if err != nil {
-		fmt.Printf("Image Proxy Fetch Error: %v\n", err)
 		http.Error(w, "Image unavailable", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		fmt.Printf("Image Proxy Upstream Status: %d\n", resp.StatusCode)
 		http.Error(w, "Image unavailable", resp.StatusCode)
 		return
 	}
 
-	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	contentType := resp.Header.Get("Content-Type")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Header().Set("Content-Type", contentType)
 
-	// Create a TeeReader to permit streaming to user while capturing for cache
-	// We need to read into a buffer for the cache
-	// IMPORTANT: Since we want to be "blazing fast", we prioritize writing to 'w'.
-	// But TeeReader writes to both synchronously.
-	// If the user has a slow connection, this might block the cache write, or vice versa?
-	// Actually, Cache write is just memory append until we flush.
-	// So TeeReader is fine, but we need to capture the full body for cache.
-
-	// 5MB limit check?
-	// Let's just limit reading to avoid DoS
 	const maxBodySize = 15 * 1024 * 1024 // 15MB
 	limitReader := io.LimitReader(resp.Body, maxBodySize)
 
-	// TeeReader writes to 'w' (client) and 'buf' (cache input)
-	// Wait, strings.Builder is not thread safe if we used a pipe, but here we are single threaded in this handler.
-	// However, TeeReader writes effectively mimic "copy to w, then copy to buf".
-	// If the client is slow, writing to 'w' blocks. This is unavoidable for streaming to client.
-	// But it does verify we don't wait for FULL body before sending first byte.
-
-	// We can't use strings.Builder with TeeReader directly because TeeReader takes a Writer.
-	// bytes.Buffer is a simple Writer.
-	// To minimize allocs, we could pre-allocate if we knew content-length.
-
-	// Create a pipe? No, that's for concurrent reading.
-	// We just want to copy to two places.
-	// io.MultiWriter(w, &buf)
-
-	// But wait, if we fail to read fully, we shouldn't cache partials ideally.
-	// But we can check error at the end.
-
-	// The problem is we want to return from the handler only after writing to user is done,
-	// but the cache setting should happen "after" that?
-	// If we use `go func() { ... }` we need the data.
-	// So we must capture the data during the write.
-
-	// If we want TRULY async cache:
-	// We need to read from Body.
-	// Write to Client.
-	// Write to some buffer.
-	// AFTER client is done, maximize the buffer.
-
-	// Better approach for speed + caching:
-	// 1. Start copying to client immediately.
-	// 2. Use a custom writer that also appends to a byte slice.
-
-	cacheBuf := new(strings.Builder)
+	var cacheBuf bytes.Buffer
 	if resp.ContentLength > 0 {
 		cacheBuf.Grow(int(resp.ContentLength))
 	}
 
-	multiWriter := io.MultiWriter(w, cacheBuf)
+	multiWriter := io.MultiWriter(w, &cacheBuf)
 
 	_, err = io.Copy(multiWriter, limitReader)
 	if err != nil {
-		// If client disconnects or network error, we probably shouldn't cache the potentially partial result
-		fmt.Printf("Image Proxy Stream Error: %v\n", err)
+		// Broken pipe / client disconnect — don't cache partial data
 		return
 	}
 
-	// Async Cache Set
-	// We captured the full body efficiently while streaming.
-	// Now offload the actual "Set" (which might involve disk I/O or hashing) to a goroutine
-	// so we can return and close the HTTP request context immediately (though HTTP/1.1 pipelining might wait, Go handles this well).
+	// Async cache set with correct content-type
+	if s.Cache != nil && cacheBuf.Len() > 0 {
+		fullBody := make([]byte, cacheBuf.Len())
+		copy(fullBody, cacheBuf.Bytes())
 
-	// We need a copy of the string/bytes because the builder buffer might be GC'd?
-	// actually strings.Builder String() returns a copy or a reference?
-	// It's a copy if we cast to []byte usually or just use the string.
-	// Let's use string.
-
-	fullBody := cacheBuf.String() // This creates a copy of the string currently in the builder
-
-	if s.Cache != nil && len(fullBody) > 0 {
-		go func(data string) {
+		go func(data []byte, ct string) {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Printf("Recovered from panic in handleImageProxy cache set: %v\n", r)
+					log.Printf("Recovered from panic in handleImageProxy cache set: %v", r)
 				}
 			}()
-			// Convert back to bytes for cache interface
-			// This is cheap.
-			s.Cache.Set(imageURL, []byte(data), 0)
-		}(fullBody)
+			cached := CachedImage{ContentType: ct, Data: data}
+			if encoded, err := msgpack.Marshal(&cached); err == nil {
+				s.Cache.Set(imageURL, encoded, 0)
+			}
+		}(fullBody, contentType)
 	}
 }
 
-// FileServer conveniently sets up a http.FileServer handler to serve
-// static files from a http.FileSystem.
+// handlePathProxy acts EXACTLY like handleImageProxy but takes the URL from the chi wildcard path
+// This allows relative M3U8 chunk requests to transparently route through our proxy
+func (s *Server) handlePathProxy(w http.ResponseWriter, r *http.Request) {
+	targetPath := chi.URLParam(r, "*")
+	if targetPath == "" {
+		http.Error(w, "Missing path", http.StatusBadRequest)
+		return
+	}
+
+	targetURL := "https://" + targetPath
+	u, err := url.Parse(targetURL)
+	if err != nil {
+		http.Error(w, "Invalid URL", http.StatusBadRequest)
+		return
+	}
+
+	if !isAllowedProxyDomain(u.Host) {
+		http.Error(w, "Domain not allowed", http.StatusForbidden)
+		return
+	}
+
+	// Check cache
+	if s.Cache != nil {
+		if data, found := s.Cache.Get(targetURL); found {
+			var cached CachedImage
+			if err := msgpack.Unmarshal(data, &cached); err == nil {
+				w.Header().Set("Cache-Control", "public, max-age=3600")
+				w.Header().Set("Content-Type", cached.ContentType)
+
+				// Optional: CORS headers for media playback just in case
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+
+				w.Write(cached.Data)
+				return
+			}
+		}
+	}
+
+	// Fetch media
+	req, err := http.NewRequestWithContext(r.Context(), "GET", targetURL, nil)
+	if err != nil {
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+
+	// Copy Range headers if browser is seeking through the video
+	if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
+		req.Header.Set("Range", rangeHeader)
+	}
+
+	resp, err := s.Client.HTTPClient.Do(req)
+	if err != nil {
+		http.Error(w, "Media unavailable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		http.Error(w, "Media unavailable", resp.StatusCode)
+		return
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if contentRange := resp.Header.Get("Content-Range"); contentRange != "" {
+		w.Header().Set("Content-Range", contentRange)
+	}
+	if contentLength := resp.Header.Get("Content-Length"); contentLength != "" {
+		w.Header().Set("Content-Length", contentLength)
+	}
+	w.WriteHeader(resp.StatusCode)
+
+	const maxBodySize = 50 * 1024 * 1024 // 50MB for video chunks/playlists
+	limitReader := io.LimitReader(resp.Body, maxBodySize)
+
+	var cacheBuf bytes.Buffer
+	// Only cache full OK responses, not partial 206 responses
+	doCache := (resp.StatusCode == http.StatusOK && s.Cache != nil)
+
+	var writer io.Writer = w
+	if doCache {
+		if resp.ContentLength > 0 && resp.ContentLength < maxBodySize {
+			cacheBuf.Grow(int(resp.ContentLength))
+		}
+		writer = io.MultiWriter(w, &cacheBuf)
+	}
+
+	_, err = io.Copy(writer, limitReader)
+	if err != nil {
+		// Broken pipe / client disconnect — don't cache partial data
+		return
+	}
+
+	// Async cache set with correct content-type
+	if doCache && cacheBuf.Len() > 0 {
+		fullBody := make([]byte, cacheBuf.Len())
+		copy(fullBody, cacheBuf.Bytes())
+
+		go func(data []byte, ct string) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("Recovered from panic in handlePathProxy cache set: %v", r)
+				}
+			}()
+			cached := CachedImage{ContentType: ct, Data: data}
+			if encoded, err := msgpack.Marshal(&cached); err == nil {
+				s.Cache.Set(targetURL, encoded, 0)
+			}
+		}(fullBody, contentType)
+	}
+}
+
 func FileServer(r chi.Router, path string, root http.FileSystem) {
 	if strings.ContainsAny(path, "{}*") {
 		panic("FileServer does not permit any URL parameters.")
@@ -516,24 +603,11 @@ func FileServer(r chi.Router, path string, root http.FileSystem) {
 
 func (s *Server) SecurityHeadersMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Content-Security-Policy
-		// Allow images from self and data: (since we proxy).
-		// Allow inline styles.
-		// Disallow objects.
 		csp := "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none';"
 		w.Header().Set("Content-Security-Policy", csp)
-
-		// X-Content-Type-Options
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-
-		// X-Frame-Options
 		w.Header().Set("X-Frame-Options", "DENY")
-
-		// Referrer-Policy
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-
-		// Strict-Transport-Security (HSTS) - Removed as per user request (and it's often handled by reverse proxy)
-
 		next.ServeHTTP(w, r)
 	})
 }

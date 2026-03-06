@@ -29,9 +29,9 @@ func Load() *Config {
 
 	return &Config{
 		Host:               getEnv("BINTERNET_HOST", "0.0.0.0"),
-		Port:               getEnv("BINTERNET_PORT", "8080"),
+		Port:               getEnv("BINTERNET_PORT", "8021"),
 		DiskCache:          getEnv("BINTERNET_DISK_CACHE", "false") == "true",
-		DiskCacheLimit:     getEnvInt64("BINTERNET_DISK_CACHE_LIMIT", 2), // 2MB
+		DiskCacheLimit:     getEnvInt64("BINTERNET_DISK_CACHE_LIMIT", 1024), // 1GB
 		MemoryCache:        getEnv("BINTERNET_MEMORY_CACHE", "false") == "true",
 		MemoryCacheLimit:   getEnvInt64("BINTERNET_MEMORY_CACHE_LIMIT", 50), // 50MB
 		FallbackDNS:        getEnv("BINTERNET_FALLBACK_DNS", ""),

@@ -22,11 +22,12 @@ func main() {
 	log.Printf("Starting Binternet server on %s", addr)
 
 	srvObj := &http.Server{
-		Addr:         addr,
-		Handler:      srv,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Addr:              addr,
+		Handler:           srv,
+		ReadHeaderTimeout: 5 * time.Second, // Slowloris protection
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      120 * time.Second, // Image proxy can stream large files to slow clients
+		IdleTimeout:       120 * time.Second,
 	}
 
 	if err := srvObj.ListenAndServe(); err != nil {
