@@ -5,14 +5,32 @@
 <body>
     <form class="search-container" method="get" action="/search.php" autocomplete="off">
         <h1><a class="no-decoration accent" href="/">Binternet</a></h1>
-        <input type="text" name="q" placeholder="Search Image" value="{{.Query}}">
+        <div id="inputWrapper" class="search-input-wrapper">
+            <input type="text" name="q" placeholder="Search Image" value="{{.Query}}">
+            <button type="submit">Search</button>
+        </div>
     </form>
 
     <div class='img-container'>
-        {{if .Images}}
+        {{if .Media}}
+        {{range .Media}}
+        {{if .IsVideo}}
+        <div class='img-result video-result'>
+            <video controls playsinline preload='none' poster='/image_proxy.php?url={{urlquery .ThumbnailURL}}'>
+                <source src='/video/{{stripScheme .VideoURL}}' type='application/x-mpegURL'>
+                Your browser does not support HLS video. Use Safari or an extension.
+            </video>
+        </div>
+        {{else}}
+        <a class='img-result' href='/image_proxy.php?url={{urlquery .URL}}'>
+            <img loading='lazy' src='/image_proxy.php?url={{urlquery .URL}}'>
+        </a>
+        {{end}}
+        {{end}}
+        {{else if .Images}}
         {{range .Images}}
-        <a class='img-result' href='/image_proxy.php?url={{.}}'>
-            <img loading='lazy' src='/image_proxy.php?url={{.}}'>
+        <a class='img-result' href='/image_proxy.php?url={{urlquery .}}'>
+            <img loading='lazy' src='/image_proxy.php?url={{urlquery .}}'>
         </a>
         {{end}}
         {{else}}
@@ -26,3 +44,28 @@
     </h2>
     <br><br><br>
     {{end}}
+
+    {{if .HasVideo}}
+    <script src="/misc/hls.light.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            if (typeof Hls === 'undefined' || !Hls.isSupported()) return;
+            var videos = document.querySelectorAll('video');
+            videos.forEach(function (video) {
+                var source = video.querySelector('source');
+                if (!source) return;
+                var src = source.src;
+                // Browsers with native HLS support (Safari) will use the <source> tag directly.
+                // For others, we attach hls.js.
+                if (!video.canPlayType('application/vnd.apple.mpegurl')) {
+                    var hls = new Hls({ startPosition: -1 });
+                    hls.loadSource(src);
+                    hls.attachMedia(video);
+                }
+            });
+        });
+    </script>
+    {{end}}
+</body>
+
+</html>
