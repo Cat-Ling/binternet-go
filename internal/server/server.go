@@ -95,7 +95,7 @@ func (s *Server) routes() {
 	s.Router.Use(middleware.Compress(5, "text/html", "text/css", "application/json", "text/plain", "application/javascript"))
 	s.Router.Use(s.SecurityHeadersMiddleware)
 
-	// Static files from Embed FS — with aggressive Cache-Control
+	// Static files from Embed FS — with 24-hour Cache-Control
 	staticSubFS, _ := fs.Sub(assets.AssetsFS, "static")
 	s.Router.Handle("/static/*", s.staticCacheHeaders(http.StripPrefix("/static/", http.FileServer(http.FS(staticSubFS)))))
 
@@ -109,7 +109,7 @@ func (s *Server) routes() {
 			return
 		}
 
-		w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
+		w.Header().Set("Cache-Control", "public, max-age=86400, immutable")
 
 		if strings.HasSuffix(fsPath, ".css") {
 			w.Header().Set("Content-Type", "text/css")
@@ -134,7 +134,7 @@ func (s *Server) routes() {
 
 func (s *Server) staticCacheHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
+		w.Header().Set("Cache-Control", "public, max-age=86400, immutable")
 		next.ServeHTTP(w, r)
 	})
 }
