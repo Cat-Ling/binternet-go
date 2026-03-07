@@ -68,6 +68,7 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to initialize cache: %w", err)
 	}
 
+	startupTime := time.Now().Unix()
 	// Load Templates from Embed FS with custom functions
 	funcMap := template.FuncMap{
 		"formatDuration": func(ms int) string {
@@ -78,6 +79,9 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		},
 		"stripScheme": func(u string) string {
 			return strings.TrimPrefix(strings.TrimPrefix(u, "https://"), "http://")
+		},
+		"version": func() int64 {
+			return startupTime
 		},
 	}
 	s.Tmpl, err = template.New("").Funcs(funcMap).ParseFS(assets.AssetsFS, "templates/*.html")
@@ -214,6 +218,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Bookmark:  result.Bookmark,
 		CSRFToken: result.CSRFToken,
 		HasVideo:  hasVideo,
+	}
+
+	if s.Config.Preload && hasVideo {
+		go s.prefetchM3U8s(result.Media)
 	}
 
 	s.Tmpl.ExecuteTemplate(w, "search.html", data)
@@ -363,6 +371,62 @@ func (s *Server) preload(ctx context.Context, mode, query, bookmark, csrfToken s
 				}
 			}
 		}(result.Images)
+	}
+}
+
+func (s *Server) prefetchM3U8s(media []pinterest.MediaItem) {
+	for _, m := range media {
+		if !m.IsVideo || m.VideoURL == "" {
+			continue
+		}
+
+		go func(videoURL string) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("Recovered from panic in prefetchM3U8s: %v", r)
+				}
+			}()
+
+			select {
+			case s.PreloadSem <- struct{}{}:
+				defer func() { <-s.PreloadSem }()
+			default:
+				return // Global semaphore full, skip
+			}
+
+			if _, found := s.Cache.Get(videoURL); found {
+				return
+			}
+
+			req, err := http.NewRequestWithContext(context.Background(), "GET", videoURL, nil)
+			if err != nil {
+				return
+			}
+
+			resp, err := s.Client.HTTPClient.Do(req)
+			if err != nil {
+				return
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode == http.StatusOK {
+				body, err := io.ReadAll(resp.Body)
+				if err == nil && len(body) > 0 {
+					// Apply our highest-quality rewrite to the cached version too
+					if strings.HasSuffix(videoURL, ".m3u8") {
+						body = processM3U8(body)
+					}
+					
+					cached := CachedImage{
+						ContentType: resp.Header.Get("Content-Type"),
+						Data:        body,
+					}
+					if encoded, err := msgpack.Marshal(&cached); err == nil {
+						s.Cache.Set(videoURL, encoded, 0)
+					}
+				}
+			}
+		}(m.VideoURL)
 	}
 }
 
@@ -536,6 +600,36 @@ func (s *Server) handlePathProxy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Accept-Ranges", "bytes")
 
+	isM3U8 := strings.HasSuffix(u.Path, ".m3u8")
+	if isM3U8 && resp.StatusCode == http.StatusOK {
+		m3u8Data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			http.Error(w, "Failed to read playlist", http.StatusBadGateway)
+			return
+		}
+
+		m3u8Data = processM3U8(m3u8Data)
+
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(m3u8Data)))
+		w.WriteHeader(resp.StatusCode)
+		w.Write(m3u8Data)
+
+		if s.Cache != nil {
+			go func(data []byte, ct string) {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("Recovered from panic in m3u8 cache set: %v", r)
+					}
+				}()
+				cached := CachedImage{ContentType: ct, Data: data}
+				if encoded, err := msgpack.Marshal(&cached); err == nil {
+					s.Cache.Set(targetURL, encoded, 0)
+				}
+			}(m3u8Data, contentType)
+		}
+		return
+	}
+
 	if contentRange := resp.Header.Get("Content-Range"); contentRange != "" {
 		w.Header().Set("Content-Range", contentRange)
 	}
@@ -612,4 +706,75 @@ func (s *Server) SecurityHeadersMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		next.ServeHTTP(w, r)
 	})
+}
+
+func processM3U8(data []byte) []byte {
+	// Check if it's a master playlist (has #EXT-X-STREAM-INF)
+	if !bytes.Contains(data, []byte("#EXT-X-STREAM-INF")) {
+		return data
+	}
+
+	lines := strings.Split(string(data), "\n")
+	var headers []string
+
+	type streamInfo struct {
+		infLine string
+		uriLine string
+		bw      int
+	}
+	var streams []streamInfo
+
+	var currentInf string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#EXT-X-STREAM-INF") {
+			currentInf = trimmed
+		} else if currentInf != "" && !strings.HasPrefix(trimmed, "#") {
+			// Parse bandwidth
+			bw := 0
+			fmt.Sscanf(extractPlaylistAttr(currentInf, "BANDWIDTH"), "%d", &bw)
+			streams = append(streams, streamInfo{infLine: currentInf, uriLine: trimmed, bw: bw})
+			currentInf = ""
+		} else {
+			if currentInf == "" {
+				headers = append(headers, trimmed)
+			}
+		}
+	}
+
+	if len(streams) == 0 {
+		return data
+	}
+
+	// Find highest bandwidth
+	highest := streams[0]
+	for _, s := range streams {
+		if s.bw > highest.bw {
+			highest = s
+		}
+	}
+
+	// Reconstruct
+	var out []string
+	out = append(out, headers...)
+	out = append(out, highest.infLine)
+	out = append(out, highest.uriLine)
+
+	return []byte(strings.Join(out, "\n") + "\n")
+}
+
+func extractPlaylistAttr(line, attr string) string {
+	idx := strings.Index(line, attr+"=")
+	if idx == -1 {
+		return ""
+	}
+	start := idx + len(attr) + 1
+	end := strings.Index(line[start:], ",")
+	if end == -1 {
+		return line[start:]
+	}
+	return line[start : start+end]
 }

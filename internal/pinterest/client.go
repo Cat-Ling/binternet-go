@@ -311,11 +311,11 @@ func extractMediaItem(result *pinterestResult) MediaItem {
 					}
 
 					// Try to get the best video URL and thumbnail
-					// Priority: V_720W > V_360W > V_240W > V_HLSV3_MOBILE
+					// Priority: Master Playlists (V_HLSV4, V_HLSV3_MOBILE) > Static Resolutions
 					vl := block.Video.VideoList
 					var bestVariant *videoVariant
 
-					for _, key := range []string{"V_720W", "V_360W", "V_240W", "V_HLSV3_MOBILE"} {
+					for _, key := range []string{"V_HLSV4", "V_HLSV3_MOBILE", "V_720W", "V_360W", "V_240W"} {
 						if v, ok := vl.Variants[key]; ok {
 							bestVariant = &v
 							break
@@ -350,7 +350,7 @@ func extractMediaItem(result *pinterestResult) MediaItem {
 		vl := result.Videos.VideoList
 
 		var bestVariant *videoVariant
-		for _, key := range []string{"V_720W", "V_360W", "V_240W", "V_HLSV3_MOBILE"} {
+		for _, key := range []string{"V_HLSV4", "V_HLSV3_MOBILE", "V_720W", "V_360W", "V_240W"} {
 			if v, ok := vl.Variants[key]; ok {
 				bestVariant = &v
 				break
