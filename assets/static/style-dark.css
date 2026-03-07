@@ -319,6 +319,11 @@ hr.small-line {
   /* ensure the badge overlays correctly */
 }
 
+.video-placeholder {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .video-badge {
   position: absolute;
   bottom: 8px;
@@ -350,8 +355,11 @@ hr.small-line {
 }
 
 .video-result video {
+  position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
-  height: auto;
+  height: 100%;
   object-fit: cover;
   border-radius: 0.2rem;
   display: block;

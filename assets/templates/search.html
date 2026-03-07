@@ -16,8 +16,8 @@
         {{range .Media}}
         {{if .IsVideo}}
         <div class='img-result video-result'>
-            <video controls playsinline preload='none' poster='/image_proxy.php?url={{urlquery .ThumbnailURL}}'>
-                <source src='/video/{{stripScheme .VideoURL}}' type='application/x-mpegURL'>
+            <img class='video-placeholder' src='/image_proxy.php?url={{urlquery .ThumbnailURL}}'>
+            <video controls playsinline preload='none' poster='/image_proxy.php?url={{urlquery .ThumbnailURL}}' data-src='/video/{{stripScheme .VideoURL}}'>
                 Your browser does not support HLS video. Use Safari or an extension.
             </video>
         </div>
@@ -46,21 +46,41 @@
     {{end}}
 
     {{if .HasVideo}}
-    <script src="/misc/hls.light.min.js"></script>
+    <script src="/static/hls.light.min.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function () {
-            if (typeof Hls === 'undefined' || !Hls.isSupported()) return;
             var videos = document.querySelectorAll('video');
             videos.forEach(function (video) {
-                var source = video.querySelector('source');
-                if (!source) return;
-                var src = source.src;
-                // Browsers with native HLS support (Safari) will use the <source> tag directly.
-                // For others, we attach hls.js.
-                if (!video.canPlayType('application/vnd.apple.mpegurl')) {
-                    var hls = new Hls({ startPosition: -1 });
-                    hls.loadSource(src);
-                    hls.attachMedia(video);
+                var src = video.getAttribute('data-src');
+                if (!src) return;
+
+                if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                    // Native HLS support (Safari)
+                    video.src = src;
+                } else if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                    // Hls.js fallback (Firefox/Chrome)
+                    var hlsAttached = false;
+                    
+                    var initHls = function() {
+                        if (hlsAttached) return;
+                        hlsAttached = true;
+                        
+                        var hls = new Hls({ startPosition: -1 });
+                        hls.loadSource(src);
+                        hls.attachMedia(video);
+                        
+                        // Small timeout to allow attach before play promise
+                        setTimeout(function() {
+                            video.play().catch(e => console.error("Play failed", e));
+                        }, 50);
+                    };
+
+                    video.addEventListener('play', function(e) {
+                        if (!hlsAttached) {
+                            e.preventDefault();
+                            initHls();
+                        }
+                    });
                 }
             });
         });
