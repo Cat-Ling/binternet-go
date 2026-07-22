@@ -1,17 +1,23 @@
 {{template "header.html" .}}
-<title>Error - Binternet</title>
+<title>Error {{.Message}}</title>
+<meta name="description" content="An error occurred on Flinternet. {{.Message}}">
 </head>
-
 <body>
-    <div class="mainContainer centered">
-        <h1><a class="no-decoration accent" href="/">Binternet</a></h1>
-        <div class="error-container" style="text-align: center; margin-top: 50px;">
-            <h2 style="color: #ff5555;">An error occurred</h2>
-            <p>{{.Message}}</p>
-            {{if .Detail}}
-            <pre
-                style="text-align: left; background: #333; padding: 10px; border-radius: 5px; overflow-x: auto;"><code>{{.Detail}}</code></pre>
-            {{end}}
-            <a href="/">Go Home</a>
-        </div>
-    </div>
+    {{template "nav.html" .}}
+
+    <main class="container home-hero">
+        <h1 class="accent" style="font-size: 6rem;">Oops!</h1>
+        <h2 style="font-size: 2rem; margin-bottom: 2rem;">{{.Message}}</h2>
+        
+        {{if .Detail}}
+            <div style="background: var(--surface); padding: 1rem 2rem; border-radius: 8px; font-family: monospace; color: var(--accent); border: 1px solid var(--border); margin-bottom: 2rem;">
+                {{.Detail}}
+            </div>
+        {{end}}
+
+        <a href="/" class="back-link-fallback logo" style="display: inline-block; padding: 1rem 3rem; background: var(--surface); border: 2px solid var(--border); border-radius: 100px; font-size: 1.1rem;">
+            Go back
+        </a>
+
+    </main>
+{{template "footer.html" .}}

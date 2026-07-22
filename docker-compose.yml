@@ -1,16 +1,16 @@
 version: '3.8'
 
 services:
-  binternet:
+  flinternet:
     build: .
-    image: binternet-go:latest
-    container_name: binternet-go
+    image: github.com/flinternet/flinternet:latest
+    container_name: flinternet-server
     ports:
       - "8021:8021"
     restart: unless-stopped
     environment:
-      - BINTERNET_SHOW_ERRORS_TO_CLIENT=false
-      - BINTERNET_FALLBACK_DNS=1.1.1.1
+      - FLINTERNET_SHOW_ERRORS_TO_CLIENT=false
+      - FLINTERNET_FALLBACK_DNS=1.1.1.1
     # Uncomment to mount a local .env file
     # env_file:
     #   - .env

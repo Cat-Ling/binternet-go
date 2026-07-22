@@ -1,0 +1,80 @@
+{{template "header.html" .}}
+<title>{{.Profile.FullName}} (@{{.Profile.Username}})</title>
+<meta name="description" content="Explore the collections and boards from {{.Profile.FullName}} on Flinternet.">
+</head>
+
+<body>
+    {{template "nav.html" .}}
+
+    <main>
+        <div class="container user-profile">
+            <img src="{{if and .IsSafari (.Profile.AvatarURL | isHEIC)}}{{.Profile.AvatarURL | proxyURL}}{{else}}{{.Profile.AvatarFallback | proxyURL}}{{end}}" class="profile-avatar" alt="">
+            <div class="profile-info">
+                <h1>{{.Profile.FullName}}</h1>
+                <p class="profile-username">@{{.Profile.Username}}</p>
+                <div class="profile-stats">
+                    <span><strong>{{.Profile.FollowerCount | formatCount}}</strong> followers</span>
+                    <span><strong>{{.Profile.FollowingCount | formatCount}}</strong> following</span>
+                </div>
+                {{if .Profile.About}}
+                    <p class="profile-about">{{.Profile.About}}</p>
+                {{end}}
+            </div>
+        </div>
+
+        <div class="container search-filters" style="margin: 2rem 0; flex-wrap: wrap;">
+            <a href="?tab=created" class="filter-item {{if eq .Tab "created"}}active{{end}}">Created</a>
+            <a href="?tab=boards" class="filter-item {{if eq .Tab "boards"}}active{{end}}">Boards</a>
+            <a href="?tab=more_ideas" class="filter-item {{if eq .Tab "more_ideas"}}active{{end}}">More Ideas</a>
+        </div>
+
+        {{if eq .Tab "boards"}}
+            <div class="boards-grid" id="boardsGrid">
+                {{range .Boards}}
+                    <a href="/{{if $.Profile.Username}}{{$.Profile.Username}}{{else}}{{$.CurrentUsername}}{{end}}/{{.URL | getSlug}}/?q={{$.Query}}&s={{$.Scope}}" class="board-card masonry-item">
+                        <div class="board-thumbnail">
+                            {{if .Thumbnail}}
+                                <img loading="lazy" src="{{if and $.IsSafari (.Thumbnail | isHEIC)}}{{.Thumbnail | proxyURL}}{{else}}{{.ThumbnailFallback | proxyURL}}{{end}}" alt="{{.Name}}" onload="resizeMasonryItem(this.closest('.masonry-item'))">
+                            {{else}}
+                                <img loading="lazy" src="{{if and $.IsSafari .IsHEIC}}{{.URL | proxyURL}}{{else}}{{.FallbackURL | proxyURL}}{{end}}" alt="{{.Title}}" style="width: 100%; height: 100%; display: block; object-fit: cover;" onclick="window.location.href='/pin/{{.PinID}}/'" onload="resizeMasonryItem(this.closest('.masonry-item'))">
+                            {{end}}
+                        </div>
+                        <div class="board-meta">
+                            <h3>{{.Name}}</h3>
+                            <p>{{.PinCount}} Pins</p>
+                        </div>
+                    </a>
+                {{else}}
+                    <div style="grid-column: 1 / -1; text-align: center; padding: 3rem 0; color: var(--text-dim);">
+                        <p>No public boards found for this user.</p>
+                    </div>
+                {{end}}
+            </div>
+        {{else}}
+            {{if .Media}}
+                {{template "pin_grid.html" .}}
+            {{else}}
+                <div style="grid-column: 1 / -1; text-align: center; padding: 3rem 0; color: var(--text-dim);">
+                    <p>No pins found.</p>
+                </div>
+            {{end}}
+        {{end}}
+
+        <script>
+            function resizeMasonryItem(item) {
+            if (typeof window.recalculateMasonry === 'function') {
+                window.recalculateMasonry();
+            }
+        }
+        </script>
+    </main>
+
+    {{if .Bookmark}}
+    <div class="container" style="text-align: center; padding: 2rem 0;">
+        <a href="/{{if .Profile.Username}}{{.Profile.Username}}{{else}}{{$.CurrentUsername}}{{end}}/?tab={{.Tab}}&bookmark={{.Bookmark}}&q={{.Query}}&s={{.Scope}}" class="load-more">
+            Load more
+        </a>
+    </div>
+    {{end}}
+
+{{template "footer.html" .}}

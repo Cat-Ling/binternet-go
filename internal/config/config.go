@@ -28,16 +28,16 @@ func Load() *Config {
 	}
 
 	return &Config{
-		Host:               getEnv("BINTERNET_HOST", "0.0.0.0"),
-		Port:               getEnv("BINTERNET_PORT", "8021"),
-		DiskCache:          getEnv("BINTERNET_DISK_CACHE", "false") == "true",
-		DiskCacheLimit:     getEnvInt64("BINTERNET_DISK_CACHE_LIMIT", 1024), // 1GB
-		MemoryCache:        getEnv("BINTERNET_MEMORY_CACHE", "false") == "true",
-		MemoryCacheLimit:   getEnvInt64("BINTERNET_MEMORY_CACHE_LIMIT", 50), // 50MB
-		FallbackDNS:        getEnv("BINTERNET_FALLBACK_DNS", ""),
-		Preload:            getEnvBool("BINTERNET_PRELOAD", false),
-		PreloadImages:      getEnvBool("BINTERNET_PRELOAD_IMAGES", false),
-		ShowErrorsToClient: getEnvBool("BINTERNET_SHOW_ERRORS_TO_CLIENT", false),
+		Host:               getEnv("FLINTERNET_HOST", "0.0.0.0"),
+		Port:               getEnv("FLINTERNET_PORT", "8021"),
+		DiskCache:          getEnv("FLINTERNET_DISK_CACHE", "false") == "true",
+		DiskCacheLimit:     getEnvInt64("FLINTERNET_DISK_CACHE_LIMIT", 1024), // 1GB
+		MemoryCache:        getEnv("FLINTERNET_MEMORY_CACHE", "false") == "true",
+		MemoryCacheLimit:   getEnvInt64("FLINTERNET_MEMORY_CACHE_LIMIT", 50), // 50MB
+		FallbackDNS:        getEnv("FLINTERNET_FALLBACK_DNS", ""),
+		Preload:            getEnvBool("FLINTERNET_PRELOAD", false),
+		PreloadImages:      getEnvBool("FLINTERNET_PRELOAD_IMAGES", false),
+		ShowErrorsToClient: getEnvBool("FLINTERNET_SHOW_ERRORS_TO_CLIENT", false),
 	}
 }
 

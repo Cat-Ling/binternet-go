@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"binternet-go/internal/config"
-	"binternet-go/internal/server"
+	"github.com/flinternet/flinternet/internal/config"
+	"github.com/flinternet/flinternet/internal/server"
 )
 
 func main() {
@@ -19,7 +19,7 @@ func main() {
 	}
 
 	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
-	log.Printf("Starting Binternet server on %s", addr)
+	log.Printf("Starting Flinternet server on %s", addr)
 
 	srvObj := &http.Server{
 		Addr:              addr,

@@ -2,7 +2,6 @@ package cache
 
 import (
 	"fmt"
-	"log"
 	"time"
 
 	badger "github.com/dgraph-io/badger/v4"
@@ -101,9 +100,6 @@ func (c *LayeredCache) enforceDiskLimit() {
 	limitBytes := c.diskLimitMB * 1024 * 1024
 
 	if totalBytes > limitBytes {
-		log.Printf("Disk cache over limit: %dMB / %dMB — running aggressive GC",
-			totalBytes/(1024*1024), c.diskLimitMB)
-
 		// Run aggressive GC (lower threshold = more aggressive)
 		for i := 0; i < 10; i++ {
 			if err := c.diskCache.RunValueLogGC(0.1); err != nil {

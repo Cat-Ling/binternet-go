@@ -1,20 +1,24 @@
 {{template "header.html" .}}
-<title>Legal - Binternet</title>
+<title>Legal Notice - Flinternet</title>
 </head>
-
 <body>
-    <div style="margin: 20px;">
-        <h1 style="font-size: 50px; margin: 0;"><a class="accent" href="/">Binternet</a></h1>
-    </div>
-    <div class="mainContainer">
-        <h2 style="text-align: center;">Legal Notice</h2>
-        <div class="bodyText" style="max-width: 800px; margin: 0 auto; text-align: left; padding: 20px; margin-bottom: 100px;">
-            <p>Binternet doesn't host any content. All content shown on any Binternet instances is from Pinterest™.
-                Pinterest is a registered trademark of Pinterest Inc. Binternet is not affiliated with Pinterest Inc.
-                Any issues with content shown on any Binternet instances need to be reported to Pinterest, not the
-                instance host's internet provider or domain provider.</p>
-            <p>Cloudflare is a registered trademark of Cloudflare, Inc. Binternet is not affiliated with Cloudflare,
-                Inc.</p>
+    {{template "nav.html" .}}
+
+    <main class="container" style="max-width: 800px; padding: 4rem 1rem;">
+        <h1 style="font-size: 3rem; margin-bottom: 2rem;">Legal Notice</h1>
+        
+        <div style="background: var(--surface); padding: 2.5rem; border-radius: var(--radius); border: 1px solid var(--border); line-height: 1.8; color: var(--text-dim);">
+            <p>Flinternet is a privacy-respecting search tool for Pinterest content. We do not store any of your searches or personal data.</p>
+            
+            <h2 style="color: var(--text); margin-top: 2rem;">Disclaimer</h2>
+            <p>The content provided here is proxied directly from Pinterest. We are not affiliated with Pinterest, and we do not host any of the images or videos on our servers permanently beyond transient caching for performance.</p>
+            
+            <h2 style="color: var(--text); margin-top: 2rem;">Credits</h2>
+            <p>Developed with &hearts; for the community. Open source on GitHub.</p>
         </div>
-    </div>
+
+        <div style="margin-top: 3rem; text-align: center;">
+            <a href="/" class="logo" style="opacity: 0.5;">&larr; Back to search</a>
+        </div>
+    </main>
 {{template "footer.html" .}}

@@ -2,7 +2,7 @@
 set -e
 
 # Configuration
-BINARY_NAME="binternet-go"
+BINARY_NAME="github.com/flinternet/flinternet"
 MAIN_PATH="cmd/server/main.go"
 OUTPUT_DIR="build"
 

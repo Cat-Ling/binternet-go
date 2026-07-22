@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" type="text/css" href="/static/style-dark.css">
+    <style>
+        body { background: transparent; padding: 0; margin: 0; }
+        .comment-section { border: none; padding: 0; }
+        .comment-inline-image {
+            max-width: 100%;
+            max-height: 300px;
+            border-radius: 8px;
+            margin-top: 0.5rem;
+            cursor: pointer;
+            display: block;
+            border: 1px solid var(--border);
+        }
+        .comment-media-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="comment-section">
+        {{if .CommentResult.Comments}}
+            <div class="comments-list">
+                {{range .CommentResult.Comments}}
+                    <div class="comment-item">
+                        {{if .AuthorAvatar}}
+                            <img src="{{.AuthorAvatar | proxyURL}}" class="comment-avatar" alt="">
+                        {{else}}
+                            <div class="comment-avatar-placeholder"></div>
+                        {{end}}
+                        <div class="comment-content">
+                            <div class="comment-author">
+                                {{if .AuthorUsername}}
+                                    <a href="/{{.AuthorUsername}}" target="_top" style="text-decoration: none; color: inherit;"><strong>{{.AuthorName}}</strong></a>
+                                {{else}}
+                                    <strong>{{.AuthorName}}</strong>
+                                {{end}}
+                                <span class="comment-date">{{.CreatedAt}}</span>
+                            </div>
+                            <div class="comment-text">{{.Text}}</div>
+                            {{if .Images}}
+                                <div class="comment-media-list">
+                                    {{range .Images}}
+                                        <div class="comment-media-item">
+                                            <img src="{{.URL | proxyURL}}" alt="" class="comment-inline-image" onclick="window.open(this.src, '_top')">
+                                        </div>
+                                    {{end}}
+                                </div>
+                            {{end}}
+                            <div class="comment-actions">
+                                {{if .Likes}}<span>{{.Likes}} likes</span>{{end}}
+                                {{if .ReplyCount}}<span>{{.ReplyCount}} replies</span>{{end}}
+                            </div>
+                        </div>
+                    </div>
+                {{end}}
+            </div>
+
+            {{if .CommentResult.Bookmark}}
+                <div id="pagination" style="text-align: center; padding: 1rem;">
+                    <a href="/pin/{{.PinID}}/comments/?bookmark={{.CommentResult.Bookmark}}{{if .Aid}}&aid={{.Aid}}{{end}}" class="show-more-label" onclick="loadMore(event, this)">View more comments</a>
+                </div>
+            {{end}}
+        {{else}}
+            <div style="text-align: center; padding: 2rem; color: var(--text-dim);">
+                <p>No comments yet.</p>
+            </div>
+        {{end}}
+    </div>
+
+    <script>
+        async function loadMore(e, btn) {
+            e.preventDefault();
+            const originalText = btn.innerHTML;
+            btn.innerHTML = 'Loading...';
+            btn.style.pointerEvents = 'none';
+            btn.style.opacity = '0.7';
+
+            try {
+                const resp = await fetch(btn.href);
+                if (!resp.ok) throw new Error('Network response was not ok');
+                const html = await resp.text();
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                
+                // Append new comments to the list
+                const newComments = doc.querySelector('.comments-list');
+                const currentList = document.querySelector('.comments-list');
+                if (newComments && currentList) {
+                    currentList.insertAdjacentHTML('beforeend', newComments.innerHTML);
+                }
+                
+                // Replace or remove pagination button
+                const newPagination = doc.getElementById('pagination');
+                const currentPagination = document.getElementById('pagination');
+                if (newPagination && currentPagination) {
+                    currentPagination.innerHTML = newPagination.innerHTML;
+                } else if (currentPagination) {
+                    currentPagination.remove();
+                }
+            } catch (err) {
+                console.error('Failed to load more comments:', err);
+                btn.innerHTML = 'Error loading. Try again?';
+                btn.style.pointerEvents = 'auto';
+                btn.style.opacity = '1';
+                setTimeout(() => { btn.innerHTML = originalText; }, 3000);
+            }
+        }
+    </script>
+</body>
+</html>

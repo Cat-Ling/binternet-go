@@ -14,7 +14,7 @@ RUN go mod download
 COPY . .
 
 # Build the binary
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o binternet-go cmd/server/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o flinternet cmd/server/main.go
 
 # Final stage
 FROM gcr.io/distroless/static-debian11
@@ -22,10 +22,10 @@ FROM gcr.io/distroless/static-debian11
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /app/binternet-go .
+COPY --from=builder /app/flinternet .
 
 # Expose port
 EXPOSE 8021
 
 # Helper to run the executable
-ENTRYPOINT ["/app/binternet-go"]
+ENTRYPOINT ["/app/flinternet"]

@@ -1,27 +1,245 @@
 {{define "header.html"}}
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" />
-  <meta charset="UTF-8" />
-  <meta name="description" content="A privacy respecting Pinterest image search" />
-  <meta name="referrer" content="no-referrer" />
-  <meta name="theme-color" content="#2a2b2b">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#000000">
+
+  <!-- SEO & Social Embeds -->
+  <meta name="description" content="{{if .OgDescription}}{{.OgDescription}}{{else}}A privacy-respecting Pinterest search engine. Explore pins, videos, and boards without tracking.{{end}}">
+  
+  <meta property="og:site_name" content="Flinternet">
+  <meta property="og:type" content="{{if .OgType}}{{.OgType}}{{else}}website{{end}}">
+  <meta property="og:title" content="{{if .OgTitle}}{{.OgTitle}}{{else}}Flinternet - Privacy Respecting Pinterest Search{{end}}">
+  <meta property="og:description" content="{{if .OgDescription}}{{.OgDescription}}{{else}}Search and explore Pinterest with total privacy. No ads, no tracking.{{end}}">
+  <meta property="og:image" content="{{if .OgImage}}{{.OgImage | proxyURL}}{{else}}/static/android-chrome-512x512.png{{end}}">
+  
+  <meta name="twitter:card" content="{{if eq .OgType "video.other"}}player{{else}}summary_large_image{{end}}">
+  <meta name="twitter:title" content="{{if .OgTitle}}{{.OgTitle}}{{else}}Flinternet{{end}}">
+  <meta name="twitter:description" content="{{if .OgDescription}}{{.OgDescription}}{{else}}Privacy-respecting Pinterest search.{{end}}">
+  <meta name="twitter:image" content="{{if .OgImage}}{{.OgImage | proxyURL}}{{else}}/static/android-chrome-512x512.png{{end}}">
+  {{if and (eq .OgType "video.other") .VideoURL}}
+  <meta name="twitter:player" content="{{.BaseURL}}/video/{{.VideoURL}}">
+  <meta name="twitter:player:width" content="1280">
+  <meta name="twitter:player:height" content="720">
+  {{end}}
+
   <link rel="stylesheet" type="text/css" href="/static/style-dark.css?v={{version}}">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
   <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
   <link rel="shortcut icon" href="/static/favicon.ico">
-  {{end}}
+{{end}}
 
-  {{define "footer.html"}}
-  <footer>
-    <a href="https://github.com/Cat-Ling/binternet-go" target="_blank">Source code</a>
-    <a href="/legal">Legal notice</a>
-  </footer>
-  </body>
+{{define "footer.html"}}
+<script src="/static/masonry.pkgd.min.js"></script>
+<script src="/static/masonry.js"></script>
+<script>
+    function handleShare(event, title, url, btnElement) {
+        event.stopPropagation();
+        if (navigator.share) {
+            navigator.share({ title: title, url: url }).catch(console.error);
+        } else if (navigator.clipboard) {
+            navigator.clipboard.writeText(url).then(() => {
+                const originalColor = btnElement.style.color;
+                btnElement.style.color = '#4caf50'; // Green success color
+                setTimeout(() => { btnElement.style.color = originalColor; }, 1500);
+            }).catch(() => {
+                prompt("Copy link to share:", url);
+            });
+        } else {
+            prompt("Copy link to share:", url);
+        }
+    }
 
+    function updateBackLink() {
+        const backLink = document.querySelector('.back-link') || document.querySelector('.back-link-fallback');
+        if (backLink) {
+            const isHome = window.location.pathname === '/' || window.location.pathname === '/ideas';
+            if (isHome) {
+                backLink.style.display = 'none';
+                return;
+            }
+
+            let state = window.history.state;
+            
+            // If this history entry isn't tagged yet, tag it.
+            if (!state || typeof state.fl_idx === 'undefined') {
+                let currentCounter = parseInt(sessionStorage.getItem('fl_history_counter') || '-1');
+                currentCounter++;
+                sessionStorage.setItem('fl_history_counter', currentCounter);
+                
+                state = Object.assign({}, state, { fl_idx: currentCounter });
+                window.history.replaceState(state, '');
+            }
+
+            if (state.fl_idx > 0) {
+                // We have internal history behind us!
+                backLink.href = "javascript:history.back()";
+                backLink.title = 'Go Back';
+            } else {
+                // We are the first page in the tab. Fallback to home.
+                backLink.href = '/';
+                backLink.title = 'Go Home';
+            }
+            
+            // Preserve the original display mode if it's a fallback button, otherwise flex
+            if (backLink.classList.contains('back-link-fallback')) {
+                backLink.style.display = 'inline-block';
+            } else {
+                backLink.style.display = 'flex';
+            }
+        }
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+        updateBackLink();
+        
+        // Smart Header Logic
+        let lastScrollY = window.scrollY;
+        const header = document.querySelector('.search-header-container');
+        
+        window.addEventListener('scroll', () => {
+            const isPinPage = document.body.classList.contains('pin-page');
+            const isDesktop = window.innerWidth > 1024;
+            
+            // Skip hiding logic on pin pages for desktop
+            if (isPinPage && isDesktop) {
+                header.classList.remove('header-hidden');
+                return;
+            }
+
+            const scrollThreshold = isPinPage ? 0 : 100;
+            
+            if (window.scrollY > lastScrollY && window.scrollY > scrollThreshold) {
+                header.classList.add('header-hidden');
+            } else {
+                header.classList.remove('header-hidden');
+            }
+            lastScrollY = window.scrollY;
+        });
+    });
+</script>
+</body>
 </html>
+{{end}}
+
+{{define "nav.html"}}
+<header class="search-header-container">
+    <div class="search-header">
+        <a href="/" class="back-link" aria-label="Go back">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline>
+            </svg>
+        </a>
+        <form class="search-form" action="/search/{{if .Scope}}{{.Scope}}{{else}}pins{{end}}/" method="get" autocomplete="off">
+            <div class="search-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+            </div>
+            <input type="text" name="q" placeholder="Search..." value="{{if .Query}}{{.Query}}{{end}}" required>
+            <button type="submit" aria-label="Search">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+            </button>
+        </form>
+    </div>
+    <div class="search-filters">
+        <a href="/search/pins/?q={{.Query}}&s=pins" class="filter-item {{if or (not .Scope) (eq .Scope "pins")}}active{{end}}">All Pins</a>
+        <a href="/search/videos/?q={{.Query}}&s=videos" class="filter-item {{if eq .Scope "videos"}}active{{end}}">Videos</a>
+        <a href="/search/boards/?q={{.Query}}&s=boards" class="filter-item {{if eq .Scope "boards"}}active{{end}}">Boards</a>
+        <a href="/search/users/?q={{.Query}}&s=users" class="filter-item {{if eq .Scope "users"}}active{{end}}">Users</a>
+    </div>
+</header>
+{{end}}
+
+{{define "pin_grid.html"}}
+<div class="grid">
+    {{range .Media}}
+        <div class="grid-item post-card {{if .IsVideo}}video-item{{end}}">
+            <!-- Post Header -->
+            <div class="post-header" onclick="window.location.href='/pin/{{.PinID}}/?q={{$.Query}}&s={{$.Scope}}'" style="cursor: pointer;">
+                {{if .AuthorUsername}}
+                    <a href="/{{.AuthorUsername}}?q={{$.Query}}&s={{$.Scope}}" class="author-avatar-link" onclick="event.stopPropagation();">
+                        {{if .AuthorAvatar}}
+                            <img src="{{if and $.IsSafari (.AuthorAvatar | isHEIC)}}{{.AuthorAvatar | proxyURL}}{{else}}{{.AuthorAvatarFallback | proxyURL}}{{end}}" class="author-avatar" alt="">
+                        {{else}}
+                            <div class="author-avatar-placeholder"></div>
+                        {{end}}
+                    </a>
+                    <a href="/{{.AuthorUsername}}?q={{$.Query}}&s={{$.Scope}}" class="author-name" onclick="event.stopPropagation();">
+                        {{if .AuthorName}}{{.AuthorName}}{{else}}@{{.AuthorUsername}}{{end}}
+                    </a>
+                {{else}}
+                    {{if .AuthorAvatar}}
+                        <img src="{{if and $.IsSafari (.AuthorAvatar | isHEIC)}}{{.AuthorAvatar | proxyURL}}{{else}}{{.AuthorAvatarFallback | proxyURL}}{{end}}" class="author-avatar" alt="">
+                    {{else}}
+                        <div class="author-avatar-placeholder"></div>
+                    {{end}}
+                    <span class="author-name">{{if .AuthorName}}{{.AuthorName}}{{else}}Pinterest User{{end}}</span>
+                {{end}}
+            </div>
+
+            <!-- Post Media -->
+            <div class="post-media" {{if and .Width .Height}}style="padding-bottom: calc({{.Height}} / {{.Width}} * 100%);"{{end}}>
+                {{if .IsVideo}}
+                    <div class="video-container paused" data-pin-id="{{.PinID}}">
+                        <video playsinline preload='metadata' poster='{{if .ThumbnailURL}}{{.ThumbnailURL | proxyURL}}{{else}}{{.URL | proxyURL}}{{end}}' data-src='/video/{{stripScheme .VideoURL}}' muted>
+                            Your browser does not support HLS video.
+                        </video>
+                        <div class="video-overlay">
+                            <div class="play-pause-icon">
+                                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                            </div>
+                        </div>
+                        <div class="video-loader"></div>
+                        <div class="mute-toggle" onclick="event.stopPropagation(); toggleMute(this);">
+                            <svg class="unmute-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77zM3 9v6h4l5 5V4L7 9H3z"/></svg>
+                        </div>
+                        <div class="video-progress-container">
+                            <div class="video-progress-bar"></div>
+                        </div>
+                    </div>
+                {{else}}
+                    <div class="image-wrapper" onclick="window.location.href='/pin/{{.PinID}}/?q={{$.Query}}&s={{$.Scope}}'" style="cursor: pointer;">
+                        <img loading="lazy" src="{{if and $.IsSafari .IsHEIC}}{{.URL | proxyURL}}{{else}}{{.FallbackURL | proxyURL}}{{end}}" alt="{{.Title}}" style="width: 100%; height: 100%; display: block; object-fit: cover;">
+                    </div>
+                {{end}}
+            </div>
+
+            <!-- Post Footer/Meta -->
+            <div class="post-meta">
+                <div class="post-actions">
+                    <div class="action-item" title="Engagement">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
+                        <span>{{if .Likes}}{{.Likes | formatCount}}{{else}}0{{end}}</span>
+                        {{if .Saves}}
+                            <span class="bullet-divider">&bull;</span>
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
+                            <span>{{.Saves | formatCount}}</span>
+                        {{end}}
+                    </div>
+                    <div class="action-item share-btn" title="Share" onclick="handleShare(event, '{{.Title | js}}', window.location.origin + '/pin/{{.PinID}}/?q={{$.Query}}', this)">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><polyline points="16 6 12 2 8 6"></polyline><line x1="12" y1="2" x2="12" y2="15"></line></svg>
+                    </div>
+                </div>
+                
+                {{if .Title}}
+                    <div class="post-title"><strong>{{.Title}}</strong></div>
+                {{end}}
+
+                {{if and .Description (ne .Description " ")}}
+                    <div class="post-description-container">
+                        <input type="checkbox" id="desc-{{.PinID}}" class="desc-toggle">
+                        <div class="post-description">{{.Description | trimDescription}}</div>
+                        <label for="desc-{{.PinID}}" class="show-more-label">more</label>
+                    </div>
+                {{end}}
+            </div>
+        </div>
+    {{end}}
+</div>
 {{end}}

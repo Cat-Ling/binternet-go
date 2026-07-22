@@ -1,80 +1,48 @@
 {{template "header.html" .}}
-<title>{{.Query}}{{if eq .Scope "videos"}} - Videos{{else if eq .Scope "boards"}} - Boards{{else if eq .Scope "users"}} - Creators{{end}}</title>
-<meta name="description" content="Explore the latest {{.Query}} {{if eq .Scope "videos"}}videos{{else if eq .Scope "boards"}}boards{{else if eq .Scope "users"}}creators{{else}}pins and ideas{{end}} on Flinternet.">
+<title>{{.Query}} - Flinternet Ideas</title>
+<meta name="description" content="Explore {{.Query}} ideas and inspiration on Flinternet.">
 </head>
 
 <body>
     {{template "nav.html" .}}
 
-    <main class="{{if or (eq .Scope "pins") (eq .Scope "videos") (not .Scope)}}grid{{else if eq .Scope "users"}}container users-grid{{end}}">
-        {{if .Media}}
-            {{template "pin_grid.html" .}}
+    <main class="container" style="padding-top: 2rem;">
+        <div style="text-align: center; margin-bottom: 2rem;">
+            <h1 style="font-size: 2.5rem; text-transform: capitalize;">{{.Query}}</h1>
+        </div>
 
-        {{else if .Boards}}
-            <div class="boards-grid" id="boardsGrid">
-                {{range .Boards}}
-                    <a href="{{.URL}}?q={{$.Query}}&s={{$.Scope}}" class="board-card masonry-item">
-                        <div class="board-thumbnail">
-                            <img loading="lazy" src="{{.Thumbnail | proxyURL}}" alt="{{.Name}}" onload="if(typeof resizeMasonryItem === 'function') resizeMasonryItem(this.closest('.masonry-item'))">
-                        </div>
-                        <div class="board-meta">
-                            <h3>{{.Name}}</h3>
-                            <p>{{.PinCount}} Pins</p>
-                        </div>
-                    </a>
-                {{end}}
-            </div>
-        {{else if .Users}}
-            {{range .Users}}
-                <a href="/{{.Username}}?q={{$.Query}}&s={{$.Scope}}" class="user-card">
-                    <img src="{{.AvatarURL | proxyURL}}" class="user-card-avatar" alt="">
-                    <div class="user-card-info">
-                        <h3>{{.FullName}}</h3>
-                        <p>@{{.Username}}</p>
-                        {{if .FollowerCount}}<p class="user-card-stats">{{.FollowerCount | formatCount}} followers</p>{{end}}
-                    </div>
-                </a>
+        <div class="grid">
+            {{if .Media}}
+                {{template "pin_grid.html" .}}
+            {{else}}
+                <div style="grid-column: 1 / -1; text-align: center; padding: 3rem 0; color: var(--text-dim);">
+                    <p>No ideas found.</p>
+                </div>
             {{end}}
-        {{else}}
-            <div class="container" style="padding: 4rem 1rem; color: var(--text-dim); text-align: center; grid-column: 1 / -1; column-span: all;">
-                <h2>No results found for "{{.Query}}"</h2>
-                <p>Try different keywords or check your spelling.</p>
-            </div>
-        {{end}}
+        </div>
     </main>
 
-    {{if .Bookmark}}
     <div class="container" style="text-align: center; padding: 2rem 0;">
-        <a href="/search/{{if .Scope}}{{.Scope}}{{else}}pins{{end}}/?q={{.Query}}&s={{.Scope}}&bookmark={{.Bookmark}}&csrftoken={{.CSRFToken}}" class="load-more">
-            Next page
+        <a href="/search/pins/?q={{.Query}}" class="load-more">
+            More Like This
         </a>
     </div>
-    {{end}}
 
     {{if .HasVideo}}
     <script src="/static/hls.light.min.js"></script>
     {{end}}
 
     <script>
-        // Masonry Logic (Just-enough JS)
-        function resizeMasonryItem(item) {
-            if (typeof window.recalculateMasonry === 'function') {
-                window.recalculateMasonry();
-            }
-        }
-
         function toggleMute(btn) {
             const container = btn.closest('.video-container');
             const video = container.querySelector('video');
             const isMuted = !video.muted;
             
-            // Sync all videos on page
             document.querySelectorAll('video').forEach(function(v) {
                 v.muted = isMuted;
                 updateMuteUI(v.closest('.video-container'), isMuted);
             });
             
-            // Persist preference
             localStorage.setItem('videoMuted', isMuted);
         }
 
@@ -150,8 +118,7 @@
                         video.play();
                         container.classList.remove('paused');
                     } else {
-                        // If already playing, taking one more click navigates to pin page
-                        window.location.href = '/pin/' + container.getAttribute('data-pin-id') + '/?q={{.Query}}&s={{.Scope}}';
+                        window.location.href = '/pin/' + container.getAttribute('data-pin-id');
                     }
                 });
 

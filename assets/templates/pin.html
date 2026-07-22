@@ -1,0 +1,259 @@
+{{template "header.html" .}}
+<title>{{if .Item.Title}}{{.Item.Title}}{{else}}Pin by {{if .Item.AuthorName}}{{.Item.AuthorName}}{{else}}Pinterest User{{end}}{{end}}</title>
+<meta name="description" content="{{if .Item.Description}}{{.Item.Description | trimDescription}}{{else}}View this pin and more inspiration on Flinternet.{{end}}">
+</head>
+
+<body class="pin-page">
+    {{template "nav.html" .}}
+
+    <main class="pin-container">
+        <div class="pin-split-view">
+            <!-- Left Column: Media -->
+            <div class="pin-media-column">
+                <div class="post-card">
+                    <!-- Media -->
+                    {{if .Item.IsVideo}}
+                        <div class="post-media">
+                            <div class="video-container paused" {{if and .Item.Width .Item.Height}}style="aspect-ratio: {{.Item.Width}} / {{.Item.Height}};"{{end}}>
+                                <video playsinline poster='{{if and .IsSafari .Item.IsHEIC}}{{.Item.URL | proxyURL}}{{else}}{{.Item.FallbackURL | proxyURL}}{{end}}' data-src='/video/{{stripScheme .Item.VideoURL}}' loop muted>
+                                    Your browser does not support HLS video.
+                                </video>
+                                <div class="video-overlay">
+                                    <div class="play-pause-icon">
+                                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                                    </div>
+                                </div>
+                                <div class="video-loader"></div>
+                                <div class="video-controls-bottom">
+                                    <div class="mute-toggle" onclick="event.stopPropagation(); toggleMute(this);">
+                                        <svg class="unmute-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77zM3 9v6h4l5 5V4L7 9H3z"/></svg>
+                                    </div>
+                                    <div class="fullscreen-toggle" onclick="event.stopPropagation(); toggleFullscreen(this);">
+                                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+                                    </div>
+                                </div>
+                                <div class="video-progress-container">
+                                    <div class="video-progress-bar"></div>
+                                </div>
+                            </div>
+                        </div>
+                    {{else}}
+                        <div class="post-media">
+                            <img src="{{if and .IsSafari .Item.IsHEIC}}{{.Item.URL | proxyURL}}{{else}}{{.Item.FallbackURL | proxyURL}}{{end}}" alt="{{.Item.Title}}" {{if and .Item.Width .Item.Height}}style="aspect-ratio: {{.Item.Width}} / {{.Item.Height}};"{{end}}>
+                        </div>
+                    {{end}}
+                </div>
+            </div>
+
+            <!-- Right Column: Info & Comments -->
+            <div class="pin-info-column">
+                <div class="pin-info-content">
+                    <!-- Header (Author) -->
+                    <div class="post-header">
+                        {{if .Item.AuthorUsername}}
+                            <a href="/{{.Item.AuthorUsername}}?q={{.Query}}&s={{.Scope}}" class="author-avatar-link">
+                                {{if .Item.AuthorAvatar}}
+                                    <img src="{{if and .IsSafari (.Item.AuthorAvatar | isHEIC)}}{{.Item.AuthorAvatar | proxyURL}}{{else}}{{.Item.AuthorAvatarFallback | proxyURL}}{{end}}" class="author-avatar" alt="">
+                                {{else}}
+                                    <div class="author-avatar-placeholder"></div>
+                                {{end}}
+                            </a>
+                            <a href="/{{.Item.AuthorUsername}}?q={{.Query}}&s={{.Scope}}" class="author-name">
+                                {{if .Item.AuthorName}}{{.Item.AuthorName}}{{else}}@{{.Item.AuthorUsername}}{{end}}
+                            </a>
+                        {{else}}
+                            {{if .Item.AuthorAvatar}}
+                                <img src="{{if and .IsSafari (.Item.AuthorAvatar | isHEIC)}}{{.Item.AuthorAvatar | proxyURL}}{{else}}{{.Item.AuthorAvatarFallback | proxyURL}}{{end}}" class="author-avatar" alt="">
+                            {{else}}
+                                <div class="author-avatar-placeholder"></div>
+                            {{end}}
+                            <span class="author-name">{{if .Item.AuthorName}}{{.Item.AuthorName}}{{else}}Pinterest User{{end}}</span>
+                        {{end}}
+                    </div>
+
+                    <!-- Meta (Actions & Title/Desc) -->
+                    <div class="post-meta">
+                        <div class="post-actions">
+                            <div class="action-item" title="Engagement">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
+                                <span>{{if .Item.Likes}}{{.Item.Likes | formatCount}}{{else}}0{{end}}</span>
+                                
+                                {{if .Item.Saves}}
+                                    <span class="bullet-divider">&bull;</span>
+                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
+                                    <span>{{.Item.Saves | formatCount}}</span>
+                                {{end}}
+
+                                {{if .Item.Repins}}
+                                    <span class="bullet-divider">&bull;</span>
+                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg>
+                                    <span>{{.Item.Repins | formatCount}}</span>
+                                {{end}}
+                            </div>
+                            <div class="action-item share-btn" title="Share" onclick="handleShare(event, '{{.Item.Title | js}}', window.location.origin + '/pin/{{.Item.PinID}}/?q={{.Query}}', this)">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><polyline points="16 6 12 2 8 6"></polyline><line x1="12" y1="2" x2="12" y2="15"></line></svg>
+                            </div>
+                        </div>
+
+                        {{if .Item.Title}}
+                            <h1 class="post-title" style="margin: 0;"><strong>{{.Item.Title}}</strong></h1>
+                        {{end}}
+
+                        {{if .Item.Description}}
+                            <div class="post-description" style="-webkit-line-clamp: unset; line-clamp: unset; -webkit-box-orient: vertical; display: -webkit-box;">{{.Item.Description}}</div>
+                        {{end}}
+                    </div>
+
+                    <!-- Comment Section -->
+                    <div class="comment-section">
+                        <h3 class="comment-count-header">Comments {{if .Item.Comments}}({{.Item.Comments | formatCount}}){{end}}</h3>
+                        {{if .Item.CommentsDisabled}}
+                            <p style="padding: 1rem; color: var(--text-dim); text-align: center;">Comments are disabled for this pin.</p>
+                        {{else}}
+                            <iframe src="/pin/{{.Item.PinID}}/comments/{{if .Item.AggregatedPinID}}?aid={{urlquery .Item.AggregatedPinID}}{{end}}" class="comments-iframe" loading="lazy"></iframe>
+                        {{end}}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    {{if .HasVideo}}
+    <script src="/static/hls.light.min.js"></script>
+    <script>
+        function toggleMute(btn) {
+            const container = btn.closest('.video-container');
+            const video = container.querySelector('video');
+            const isMuted = !video.muted;
+            video.muted = isMuted;
+            updateMuteUI(container, isMuted);
+            // Persist preference
+            localStorage.setItem('videoMuted', isMuted);
+        }
+
+        function toggleFullscreen(btn) {
+            const container = btn.closest('.video-container');
+            const video = container.querySelector('video');
+            
+            if (!document.fullscreenElement) {
+                if (container.requestFullscreen) {
+                    container.requestFullscreen();
+                } else if (container.webkitRequestFullscreen) {
+                    container.webkitRequestFullscreen();
+                } else if (video.webkitEnterFullscreen) {
+                    video.webkitEnterFullscreen(); // iOS fallback
+                }
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
+        }
+
+        function updateFullscreenUI() {
+            const btn = document.querySelector('.fullscreen-toggle');
+            if (!btn) return;
+            if (document.fullscreenElement) {
+                btn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>';
+            } else {
+                btn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>';
+            }
+        }
+
+        document.addEventListener('fullscreenchange', updateFullscreenUI);
+        document.addEventListener('webkitfullscreenchange', updateFullscreenUI);
+
+        function updateMuteUI(container, isMuted) {
+            const btn = container.querySelector('.mute-toggle');
+            if (isMuted) {
+                btn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.58.45-1.24.8-1.95.98v2.06c1.26-.26 2.39-.81 3.37-1.56l2.3 2.3 1.27-1.27L4.27 3zM10 15.17L7.83 13H5v-2h2.83l.88-.88L10 11.41v3.76zM12 4L9.91 6.09 12 8.18V4z"/></svg>';
+            } else {
+                btn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>';
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            var globalMuted = localStorage.getItem('videoMuted') === 'false' ? false : true;
+            var videoContainer = document.querySelector('.video-container');
+            if (!videoContainer) return;
+
+            var video = videoContainer.querySelector('video');
+            var progressBar = videoContainer.querySelector('.video-progress-bar');
+            var src = video.getAttribute('data-src');
+            if (!src) return;
+
+            video.muted = globalMuted;
+            updateMuteUI(videoContainer, globalMuted);
+
+            var isM3U8 = src.indexOf('.m3u8') !== -1;
+
+            if (isM3U8) {
+                if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                    video.src = src;
+                } else if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                    var hls = new Hls({ capLevelToPlayerSize: true, autoStartLoad: true });
+                    hls.loadSource(src);
+                    hls.attachMedia(video);
+                }
+            } else {
+                video.src = src;
+            }
+
+            videoContainer.addEventListener('click', function(e) {
+                if (e.target.closest('.mute-toggle')) return;
+                if (video.paused) {
+                    // Immediately pause all other videos to free bandwidth
+                    document.querySelectorAll('video').forEach(function(otherVideo) {
+                        if (otherVideo !== video && !otherVideo.paused) {
+                            otherVideo.pause();
+                            var otherContainer = otherVideo.closest('.video-container');
+                            if (otherContainer) {
+                                otherContainer.classList.add('paused');
+                                otherContainer.classList.remove('loading');
+                            }
+                        }
+                    });
+
+                    if (video.readyState < 3) {
+                        videoContainer.classList.add('loading');
+                    }
+                    video.play();
+                    videoContainer.classList.remove('paused');
+                } else {
+                    video.pause();
+                    videoContainer.classList.add('paused');
+                }
+            });
+
+            video.addEventListener('waiting', function() {
+                videoContainer.classList.add('loading');
+            });
+
+            video.addEventListener('playing', function() {
+                videoContainer.classList.remove('loading');
+            });
+
+            video.addEventListener('timeupdate', function() {
+                var percent = (video.currentTime / video.duration) * 100;
+                progressBar.style.width = percent + '%';
+            });
+
+            var progressContainer = videoContainer.querySelector('.video-progress-container');
+            progressContainer.addEventListener('click', function(e) {
+                e.stopPropagation();
+                var rect = progressContainer.getBoundingClientRect();
+                var pos = (e.pageX - rect.left) / rect.width;
+                video.currentTime = pos * video.duration;
+            });
+
+            video.addEventListener('ended', function() {
+                videoContainer.classList.add('paused');
+            });
+
+            updateMuteUI(videoContainer, video.muted);
+            if (video.paused) videoContainer.classList.add('paused');
+        });
+    </script>
+    {{end}}
+
+{{template "footer.html" .}}

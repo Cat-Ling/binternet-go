@@ -1,51 +1,105 @@
 {{template "header.html" .}}
-<title>{{.Query}}{{if eq .Scope "videos"}} - Videos{{else if eq .Scope "boards"}} - Boards{{else if eq .Scope "users"}} - Creators{{end}}</title>
-<meta name="description" content="Explore the latest {{.Query}} {{if eq .Scope "videos"}}videos{{else if eq .Scope "boards"}}boards{{else if eq .Scope "users"}}creators{{else}}pins and ideas{{end}} on Flinternet.">
+<title>{{if .Board}}{{.Board.Name}}{{else}}{{.BoardSlug}}{{end}} - {{.Username}}</title>
+<meta name="description" content="View pins and inspiration from the {{if .Board}}{{.Board.Name}}{{else}}{{.BoardSlug}}{{end}} board by {{.Username}} on Flinternet.">
 </head>
 
 <body>
     {{template "nav.html" .}}
 
-    <main class="{{if or (eq .Scope "pins") (eq .Scope "videos") (not .Scope)}}grid{{else if eq .Scope "users"}}container users-grid{{end}}">
+    <main class="grid">
         {{if .Media}}
-            {{template "pin_grid.html" .}}
-
-        {{else if .Boards}}
-            <div class="boards-grid" id="boardsGrid">
-                {{range .Boards}}
-                    <a href="{{.URL}}?q={{$.Query}}&s={{$.Scope}}" class="board-card masonry-item">
-                        <div class="board-thumbnail">
-                            <img loading="lazy" src="{{.Thumbnail | proxyURL}}" alt="{{.Name}}" onload="if(typeof resizeMasonryItem === 'function') resizeMasonryItem(this.closest('.masonry-item'))">
-                        </div>
-                        <div class="board-meta">
-                            <h3>{{.Name}}</h3>
-                            <p>{{.PinCount}} Pins</p>
-                        </div>
-                    </a>
-                {{end}}
-            </div>
-        {{else if .Users}}
-            {{range .Users}}
-                <a href="/{{.Username}}?q={{$.Query}}&s={{$.Scope}}" class="user-card">
-                    <img src="{{.AvatarURL | proxyURL}}" class="user-card-avatar" alt="">
-                    <div class="user-card-info">
-                        <h3>{{.FullName}}</h3>
-                        <p>@{{.Username}}</p>
-                        {{if .FollowerCount}}<p class="user-card-stats">{{.FollowerCount | formatCount}} followers</p>{{end}}
+            {{range .Media}}
+                <div class="grid-item post-card {{if .IsVideo}}video-item{{end}}">
+                    <!-- Post Header -->
+                    <div class="post-header" onclick="window.location.href='/pin/{{.PinID}}/?q={{$.Query}}&s={{$.Scope}}'" style="cursor: pointer;">
+                        {{if .AuthorUsername}}
+                            <a href="/{{.AuthorUsername}}?q={{$.Query}}&s={{$.Scope}}" class="author-avatar-link" onclick="event.stopPropagation();">
+                                {{if .AuthorAvatar}}
+                                    <img src="{{if and $.IsSafari (.AuthorAvatar | isHEIC)}}{{.AuthorAvatar | proxyURL}}{{else}}{{.AuthorAvatarFallback | proxyURL}}{{end}}" class="author-avatar" alt="">
+                                {{else}}
+                                    <div class="author-avatar-placeholder"></div>
+                                {{end}}
+                            </a>
+                            <a href="/{{.AuthorUsername}}?q={{$.Query}}&s={{$.Scope}}" class="author-name" onclick="event.stopPropagation();">
+                                {{if .AuthorName}}{{.AuthorName}}{{else}}@{{.AuthorUsername}}{{end}}
+                            </a>
+                        {{else}}
+                            {{if .AuthorAvatar}}
+                                <img src="{{if and $.IsSafari (.AuthorAvatar | isHEIC)}}{{.AuthorAvatar | proxyURL}}{{else}}{{.AuthorAvatarFallback | proxyURL}}{{end}}" class="author-avatar" alt="">
+                            {{else}}
+                                <div class="author-avatar-placeholder"></div>
+                            {{end}}
+                            <span class="author-name">{{if .AuthorName}}{{.AuthorName}}{{else}}Pinterest User{{end}}</span>
+                        {{end}}
                     </div>
-                </a>
+
+                    <div class="post-media" {{if and .Width .Height}}style="padding-bottom: calc({{.Height}} / {{.Width}} * 100%);"{{end}}>
+                        {{if .IsVideo}}
+                            <div class="video-container paused" data-pin-id="{{.PinID}}">
+                                <video playsinline preload='metadata' poster='{{if and $.IsSafari .IsHEIC}}{{.URL | proxyURL}}{{else}}{{.FallbackURL | proxyURL}}{{end}}' data-src='/video/{{stripScheme .VideoURL}}' muted>
+                                    Your browser does not support HLS video.
+                                </video>
+                                <div class="video-overlay">
+                                    <div class="play-pause-icon">
+                                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                                    </div>
+                                </div>
+                                <div class="video-loader"></div>
+                                <div class="mute-toggle" onclick="event.stopPropagation(); toggleMute(this);">
+                                    <svg class="unmute-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77zM3 9v6h4l5 5V4L7 9H3z"/></svg>
+                                </div>
+                                <div class="video-progress-container">
+                                    <div class="video-progress-bar"></div>
+                                </div>
+                            </div>
+                        {{else}}
+                            <div class="image-wrapper" onclick="window.location.href='/pin/{{.PinID}}/?q={{$.Query}}&s={{$.Scope}}'" style="cursor: pointer;">
+                                <img loading="lazy" src="{{if and $.IsSafari .IsHEIC}}{{.URL | proxyURL}}{{else}}{{.FallbackURL | proxyURL}}{{end}}" alt="{{.Title}}" style="width: 100%; height: 100%; display: block; object-fit: cover;">
+                            </div>
+                        {{end}}
+                    </div>
+
+                    <!-- Post Footer/Meta -->
+                    <div class="post-meta">
+                        <div class="post-actions">
+                            <div class="action-item" title="Engagement">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
+                                <span>{{if .Likes}}{{.Likes | formatCount}}{{else}}0{{end}}</span>
+                                {{if .Saves}}
+                                    <span class="bullet-divider">&bull;</span>
+                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
+                                    <span>{{.Saves | formatCount}}</span>
+                                {{end}}
+                            </div>
+                            <div class="action-item share-btn" title="Share" onclick="handleShare(event, '{{.Title | js}}', window.location.origin + '/pin/{{.PinID}}/?q={{$.Query}}', this)">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><polyline points="16 6 12 2 8 6"></polyline><line x1="12" y1="2" x2="12" y2="15"></line></svg>
+                            </div>
+                        </div>
+                        
+                        {{if .Title}}
+                            <div class="post-title"><strong>{{.Title}}</strong></div>
+                        {{end}}
+
+                        {{if and .Description (ne .Description " ")}}
+                            <div class="post-description-container">
+                                <input type="checkbox" id="desc-{{.PinID}}" class="desc-toggle">
+                                <div class="post-description">{{.Description | trimDescription}}</div>
+                                <label for="desc-{{.PinID}}" class="show-more-label">more</label>
+                            </div>
+                        {{end}}
+                    </div>
+                </div>
             {{end}}
         {{else}}
             <div class="container" style="padding: 4rem 1rem; color: var(--text-dim); text-align: center; grid-column: 1 / -1; column-span: all;">
-                <h2>No results found for "{{.Query}}"</h2>
-                <p>Try different keywords or check your spelling.</p>
+                <h2>No pins found in this board.</h2>
             </div>
         {{end}}
     </main>
 
     {{if .Bookmark}}
     <div class="container" style="text-align: center; padding: 2rem 0;">
-        <a href="/search/{{if .Scope}}{{.Scope}}{{else}}pins{{end}}/?q={{.Query}}&s={{.Scope}}&bookmark={{.Bookmark}}&csrftoken={{.CSRFToken}}" class="load-more">
+        <a href="/{{.Username}}/{{.BoardSlug}}/?bookmark={{.Bookmark}}&q={{.Query}}&s={{.Scope}}" class="load-more">
             Next page
         </a>
     </div>
@@ -53,16 +107,7 @@
 
     {{if .HasVideo}}
     <script src="/static/hls.light.min.js"></script>
-    {{end}}
-
     <script>
-        // Masonry Logic (Just-enough JS)
-        function resizeMasonryItem(item) {
-            if (typeof window.recalculateMasonry === 'function') {
-                window.recalculateMasonry();
-            }
-        }
-
         function toggleMute(btn) {
             const container = btn.closest('.video-container');
             const video = container.querySelector('video');
@@ -201,5 +246,6 @@
             }
         });
     </script>
+    {{end}}
 
 {{template "footer.html" .}}
