@@ -38,8 +38,6 @@ jobs:
       - name: Verify Go Code
         run: |
           go build -v ./cmd/server
-          go build -v ./cmd/inspect_ideas
-          go build -v ./cmd/test_client
 
   docker:
     name: Verify Docker Build
